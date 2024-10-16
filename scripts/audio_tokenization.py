@@ -1,6 +1,6 @@
 import datasets
 from datasets import load_dataset
-
+import shutil
 import os
 
 from tqdm.auto import tqdm
@@ -48,15 +48,16 @@ if __name__ == '__main__':
 
     window_fn = window_function(n_fft, "hann")
 
-    minimal_segment_frames = int(expected_sampling_rate / 100) # 10мс
+    minimal_segment_frames = int(expected_sampling_rate / 40) # 10мс
     maximum_segment_frames = int(expected_sampling_rate / 2)       # 1с
 
     processed_segments = []
 
     audio_segments_base_path = "./data/audio_segments"
+    shutil.rmtree(audio_segments_base_path)
     os.makedirs(audio_segments_base_path, exist_ok=True)
 
-    for item in tqdm(audio_dataset):
+    for item in tqdm(audio_dataset.select(range(300))):
         audio_waveform = item['audio']['array']
 
         item_melspec = spectrogram(
@@ -81,7 +82,7 @@ if __name__ == '__main__':
         # append the last frame for last segment
         item_waveform_minimas = item_waveform_minimas.tolist() + [ audio_waveform.shape[-1] ]
 
-        for waveform_minima in item_waveform_minimas[1:]:
+        for i, waveform_minima in enumerate(item_waveform_minimas[1:]):
             segment_length_frames = waveform_minima - prev_minima
 
             if segment_length_frames < minimal_segment_frames:
@@ -92,9 +93,11 @@ if __name__ == '__main__':
                 # handle too big segments
                 split_sizes = [ maximum_segment_frames ] * (segment_length_frames // maximum_segment_frames)
                 split_sizes = np.cumsum(split_sizes)
-                # print("item_waveform_minimas", item_waveform_minimas)
-                # print('waveform_minima - prev_minima', waveform_minima, prev_minima, 'segment_length_frames', segment_length_frames, 'maximum_segment_frames', maximum_segment_frames)
-                # print(split_sizes)
+                if segment_length_frames - split_sizes[-1] < minimal_segment_frames:
+                    split_sizes[-1] = segment_length_frames - minimal_segment_frames
+                # print(i, "item_waveform_minimas", item_waveform_minimas)
+                # print(i, 'waveform_minima - prev_minima', waveform_minima, prev_minima, 'segment_length_frames', segment_length_frames, 'maximum_segment_frames', maximum_segment_frames)
+                # print(i, split_sizes)
                 splitted_waveform_segments = np.split(audio_waveform[prev_minima:waveform_minima], split_sizes)
                 # print("splitted_waveform_segments", splitted_waveform_segments)
                 item_audio_segments.extend(splitted_waveform_segments)
@@ -107,6 +110,15 @@ if __name__ == '__main__':
 
         # print("item_audio_segments",  int(audio_waveform.shape[-1]/expected_sampling_rate), "s. segments count", len(item_audio_segments), [ f"{x.shape[-1]/expected_sampling_rate:.2f}" for x in item_audio_segments])
         for i, item_audio_segment in enumerate(item_audio_segments):
+            if i == 0 and item_audio_segment.shape[-1] < minimal_segment_frames:
+                # silence padding to fit minimul segment length
+                item_audio_segment_padded = np.zeros([minimal_segment_frames])
+                item_audio_segment_padded[-item_audio_segment.shape[-1]:] = item_audio_segment
+                item_audio_segment = item_audio_segment_padded
+
+
+            assert item_audio_segment.shape[-1] >= minimal_segment_frames, 'segment minimal length was not violated'
+
             segment_filename = os.path.join(audio_segments_base_path, item["id"] + "_" + str(i) + ".wav")
             torchaudio.save(segment_filename, torch.from_numpy(item_audio_segment).unsqueeze(0), sample_rate=expected_sampling_rate)
 
