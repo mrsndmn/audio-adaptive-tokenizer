@@ -1,8 +1,8 @@
 import torch
 import numpy as np
-from torch.utils.data import Dataset
+from datasets import Dataset
 
-class SegmentedHubertLibris(Dataset):
+class SegmentedHubertLibris(torch.utils.data.Dataset):
     def __init__(self, segments_dataset):
         self.segments_dataset = segments_dataset
 
@@ -12,9 +12,14 @@ class SegmentedHubertLibris(Dataset):
     def __getitem__(self, idx):
         item = self.segments_dataset[idx]
 
-        audio_segments_embeddings = torch.load(item['segments_embeddings_path'])
+        audio_segments_embeddings = torch.load(item['segments_embeddings_path'], weights_only=True)
 
         return {
             "text": item['text'],
             "audio_segments_embeddings": audio_segments_embeddings,
         }
+
+    @classmethod
+    def load_from_disk(klass, dataset_path):
+        ds = Dataset.load_from_disk(dataset_path)
+        return klass(ds)
