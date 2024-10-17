@@ -1,3 +1,3 @@
 
-
-
+class AmplitudeTokenizer():
+    pass # TODO

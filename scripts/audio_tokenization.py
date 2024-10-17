@@ -3,6 +3,8 @@ from datasets import load_dataset
 import shutil
 import os
 
+from transformers import Wav2Vec2Model, AutoProcessor
+
 from tqdm.auto import tqdm
 
 import torchaudio
@@ -28,6 +30,12 @@ def find_amplitude_minimas(melspec):
     return minimas
 
 if __name__ == '__main__':
+
+    processor = AutoProcessor.from_pretrained("facebook/hubert-large-ls960-ft")
+
+    model = Wav2Vec2Model.from_pretrained("facebook/hubert-base-ls960", torch_dtype=torch.float16)
+
+
     n_fft = 400
     hop_length = 160
     feature_size = 80
@@ -54,10 +62,16 @@ if __name__ == '__main__':
     processed_segments = []
 
     audio_segments_base_path = "./data/audio_segments"
-    shutil.rmtree(audio_segments_base_path)
+    if os.path.exists(audio_segments_base_path):
+        shutil.rmtree(audio_segments_base_path)
     os.makedirs(audio_segments_base_path, exist_ok=True)
 
-    for item in tqdm(audio_dataset.select(range(300))):
+    audio_segments_embeddings_base_path = "./data/audio_segments_embeddings"
+    if os.path.exists(audio_segments_embeddings_base_path):
+        shutil.rmtree(audio_segments_embeddings_base_path)
+    os.makedirs(audio_segments_embeddings_base_path, exist_ok=True)
+
+    for item in tqdm(audio_dataset.select(range(100))):
         audio_waveform = item['audio']['array']
 
         item_melspec = spectrogram(
@@ -109,6 +123,10 @@ if __name__ == '__main__':
         assert len(item_audio_segments) < 200
 
         # print("item_audio_segments",  int(audio_waveform.shape[-1]/expected_sampling_rate), "s. segments count", len(item_audio_segments), [ f"{x.shape[-1]/expected_sampling_rate:.2f}" for x in item_audio_segments])
+        segments_frames = []
+        segments_embeddings = []
+
+        segments_embeddings_file = os.path.join(audio_segments_embeddings_base_path, item['id'] + ".pt")
         for i, item_audio_segment in enumerate(item_audio_segments):
             if i == 0 and item_audio_segment.shape[-1] < minimal_segment_frames:
                 # silence padding to fit minimul segment length
@@ -116,18 +134,27 @@ if __name__ == '__main__':
                 item_audio_segment_padded[-item_audio_segment.shape[-1]:] = item_audio_segment
                 item_audio_segment = item_audio_segment_padded
 
-
             assert item_audio_segment.shape[-1] >= minimal_segment_frames, 'segment minimal length was not violated'
+            segments_frames.append(item_audio_segment.shape[-1])
 
-            segment_filename = os.path.join(audio_segments_base_path, item["id"] + "_" + str(i) + ".wav")
-            torchaudio.save(segment_filename, torch.from_numpy(item_audio_segment).unsqueeze(0), sample_rate=expected_sampling_rate)
+            input_values = processor(
+                item_audio_segment,
+                sampling_rate=expected_sampling_rate,
+                return_tensors="pt"
+            ).input_values
+            hidden_states = model(input_values.to(torch.float16)).last_hidden_state
 
-            processed_segments.append({
-                "audio_path": segment_filename,
-                "segment_num": i,
-                "id": item["id"],
-                "text": item["text"],
-            })
+            segments_embeddings.append(hidden_states)
+
+        torch.save(segments_embeddings, segments_embeddings_file)
+
+        processed_segments.append({
+            "id": item["id"],
+            "audio_path": item['audio']['path'],
+            "segments_embeddings_path": segments_embeddings_file,
+            "segments_frames": segments_frames,
+            "text": item["text"],
+        })
 
     segmented_dataset = Dataset.from_list(processed_segments)
     segmented_dataset = segmented_dataset.cast_column("audio", Audio(sampling_rate=expected_sampling_rate))
