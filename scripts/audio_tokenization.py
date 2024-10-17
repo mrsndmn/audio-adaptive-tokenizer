@@ -48,7 +48,7 @@ if __name__ == '__main__':
 
     window_fn = window_function(n_fft, "hann")
 
-    minimal_segment_frames = int(expected_sampling_rate / 40) # 10мс
+    minimal_segment_frames = int(expected_sampling_rate / 40) # 400мс
     maximum_segment_frames = int(expected_sampling_rate / 2)       # 1с
 
     processed_segments = []

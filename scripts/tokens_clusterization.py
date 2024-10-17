@@ -1,4 +1,5 @@
 
+from tqdm.auto import tqdm
 import torch
 from datasets import Dataset, Audio
 from transformers import Wav2Vec2Model, AutoProcessor
@@ -16,7 +17,7 @@ if __name__ == '__main__':
 
     all_hidden_states = []
 
-    for segment_item in ds.select(range(300)):
+    for segment_item in tqdm(ds.select(range(1000))):
         # Batch size 1
         input_values = processor(
             segment_item['audio_path']['array'],
@@ -26,11 +27,12 @@ if __name__ == '__main__':
         hidden_states = model(input_values.to(torch.float16)).last_hidden_state
 
         all_hidden_states.append({
-            "hidden_states": hidden_states,
+            "hidden_states": hidden_states.mean(1).squeeze(), # [ 768 ]
+            "hubert_tokens": hidden_states.shape[1],
             "segment_num":   segment_item["segment_num"],
             "id":            segment_item["id"],
             "text":          segment_item["text"],
         })
 
-    all_hidden_states
-    breakpoint()
+    ds = Dataset.from_list(all_hidden_states)
+    ds.save_to_disk("data/segment_hubert_embeddings.dataset")
