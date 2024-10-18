@@ -35,7 +35,7 @@ class TokenizedSpeechLM(nn.Module):
     def encode_text(self, input_ids=None):
         return self.lm_decoder.model.embed_tokens(input_ids)
 
-    def prepare_audio_inputs(self, input_ids=None, inputs_embeds=None, audio_embeds=None, attention_mask=None):
+    def prepare_audio_inputs(self, input_ids=None, inputs_embeds=None, audio_embeds=None, attention_mask=None, audio_embeds_attention_mask=None):
 
         if input_ids is not None:
             if inputs_embeds is not None:
@@ -73,7 +73,11 @@ class TokenizedSpeechLM(nn.Module):
         audio_tokens_seq_len = audio_embeds_projection.shape[1] + 2
 
         if attention_mask is not None:
-            additional_attention_mask = torch.ones([bath_size, audio_tokens_seq_len], device=audio_embeds_projection.device)
+            if audio_embeds_attention_mask is None:
+                additional_attention_mask = torch.ones([bath_size, audio_tokens_seq_len], device=audio_embeds_projection.device)
+            else:
+                audio_tokens_labels_mask = torch.ones([bath_size, 1])
+                additional_attention_mask = torch.cat([audio_tokens_labels_mask, audio_embeds_attention_mask, audio_tokens_labels_mask], dim=1)
 
             # мы можем это сделать тк атеншну все равно на какой позиции находятся токены,
             # главное, чтобы они были видны в атеншне

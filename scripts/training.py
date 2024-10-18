@@ -34,12 +34,12 @@ class TrainConfig:
     log_level = "DEBUG"
     # Training
     num_epochs = 10
-    train_batch_size = 1
+    train_batch_size = 10
     val_batch_size = 1
     log_grad_norm = True
     learning_rate = 1e-4
-    lm_learning_rate = 1e-6
-    gradient_accumulation_steps = 100
+    lm_learning_rate = 1e-4
+    gradient_accumulation_steps = 1
 
     evaluate_every_epoch_mod = 1
     save_model_every_epoch_mod = 2
@@ -129,6 +129,8 @@ def val_loop(model: TokenizedSpeechLM, tokenizer, val_dataloader: DataLoader, ep
     for batch in tqdm(val_dataloader):
 
         batch_input_ids = batch['input_ids'].to(device)
+        attention_mask = batch['attention_mask'].to(device)
+        audio_embeds_attention_mask = batch['audio_embeds_attention_mask'].to(device)
         caption_legth = batch_input_ids.shape[1]
 
         if not no_loss:
@@ -291,7 +293,19 @@ def get_collate_fn(tokenizer, validation=False):
         tokenized_caption = tokenizer(tokenizer_input, padding=True)
         result['input_ids'] = torch.tensor(tokenized_caption['input_ids'])
         result['attention_mask'] = torch.tensor(tokenized_caption['attention_mask'])
-        result['audio_embeds_last_hidden_state'] = torch.cat([x['audio_embeds_last_hidden_state'] for x in items], dim=0)
+
+        max_length = max(x['audio_embeds_last_hidden_state'].shape[1] for x in items)
+        audio_embeds_hidden_dim = items[0]['audio_embeds_last_hidden_state'].shape[-1]
+
+        audio_embeds_attention_mask = torch.zeros([len(items), max_length])
+        collated_audio_embeds_last_hidden_state = torch.zeros([len(items), max_length, audio_embeds_hidden_dim])
+        for i, item in enumerate(items):
+            seq_len = item['audio_embeds_last_hidden_state'].shape[1]
+            audio_embeds_attention_mask[i, :seq_len] = 1
+            collated_audio_embeds_last_hidden_state[i:i+1, :seq_len, :] = item['audio_embeds_last_hidden_state']
+
+        result['audio_embeds_attention_mask'] = audio_embeds_attention_mask
+        result['audio_embeds_last_hidden_state'] = collated_audio_embeds_last_hidden_state
 
         return result
 
@@ -352,12 +366,12 @@ if __name__ == '__main__':
 
     logger.info("load language model")
 
-    # lm_decoder_config = AutoConfig.from_pretrained(train_config.lm_pretrained_model)
-    # lm_decoder_config.num_hidden_layers = 2
-    # lm_decoder = LlamaForCausalLM(lm_decoder_config)
+    lm_decoder_config = AutoConfig.from_pretrained(train_config.lm_pretrained_model)
+    lm_decoder_config.num_hidden_layers = 2
+    lm_decoder = LlamaForCausalLM(lm_decoder_config)
 
-    lm_decoder = LlamaForCausalLM.from_pretrained(train_config.lm_pretrained_model)
-    freeze_model(lm_decoder)
+    # lm_decoder = LlamaForCausalLM.from_pretrained(train_config.lm_pretrained_model)
+    # freeze_model(lm_decoder)
     tokenizer = AutoTokenizer.from_pretrained(train_config.lm_pretrained_model)
     lm_decoder.to(device)
 
