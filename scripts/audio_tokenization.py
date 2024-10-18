@@ -71,7 +71,7 @@ if __name__ == '__main__':
         shutil.rmtree(audio_segments_embeddings_base_path)
     os.makedirs(audio_segments_embeddings_base_path, exist_ok=True)
 
-    for item in tqdm(audio_dataset.select(range(100))):
+    for item in tqdm(audio_dataset.select(range(1500))):
         audio_waveform = item['audio']['array']
 
         item_melspec = spectrogram(

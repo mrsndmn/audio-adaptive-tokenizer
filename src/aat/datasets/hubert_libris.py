@@ -23,3 +23,4 @@ class SegmentedHubertLibris(torch.utils.data.Dataset):
     def load_from_disk(klass, dataset_path):
         ds = Dataset.load_from_disk(dataset_path)
         return klass(ds)
+
