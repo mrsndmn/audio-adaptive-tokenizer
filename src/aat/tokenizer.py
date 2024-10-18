@@ -157,9 +157,11 @@ class AdaptiveAudioAmplitudeTokenizer():
                 # handle too big segments
                 split_sizes = [ self.max_segment_frames ] * (segment_length_frames // self.max_segment_frames)
                 split_sizes = np.cumsum(split_sizes)
-                if segment_length_frames - split_sizes[-1] < self.min_segment_frames:
+                last_frame_gap = segment_length_frames - split_sizes[-1]
+                if last_frame_gap == 0:
+                    split_sizes = split_sizes[:-1] # drop last empty segment
+                elif last_frame_gap <  self.min_segment_frames:
                     split_sizes[-1] = segment_length_frames - self.min_segment_frames
-
                 splitted_waveform_segments = np.split(audio_waveform[prev_minima:waveform_minima], split_sizes)
                 waveform_segments.extend(splitted_waveform_segments)
             else:
