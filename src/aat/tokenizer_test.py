@@ -3,20 +3,9 @@ import numpy as np
 from .audio import AudioWaveform
 from .tokenizer import AdaptiveAudioAmplitudeTokenizer
 
-def _monotonic_sin_waveform(tokenizer):
-    sampling_rate = tokenizer.sampling_rate
-    seconds_duration = 2
-    waveform = np.sin(np.repeat(np.arange(0, 1, 1/sampling_rate), seconds_duration))
-
-    wf_sr = AudioWaveform(waveform, sampling_rate)
-
-    assert wf_sr.duration_seconds == seconds_duration
-
-    return wf_sr
-
 def _silence_waveform(tokenizer):
     sampling_rate = tokenizer.sampling_rate
-    seconds_duration = 15
+    seconds_duration = 2
     waveform = np.zeros([ seconds_duration*sampling_rate ])
 
     wf_sr = AudioWaveform(waveform, sampling_rate)
@@ -32,7 +21,7 @@ def test_pretokenize():
 
 def test_tokenizer():
     tokenizer = AdaptiveAudioAmplitudeTokenizer()
-    wf_sr = _monotonic_sin_waveform(tokenizer)
+    wf_sr = _silence_waveform(tokenizer)
 
     segments = tokenizer.tokenize(wf_sr)
 

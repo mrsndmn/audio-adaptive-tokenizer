@@ -38,10 +38,11 @@ class TrainConfig:
     val_batch_size = 1
     log_grad_norm = True
     learning_rate = 1e-4
-    gradient_accumulation_steps = 10
+    lm_learning_rate = 1e-6
+    gradient_accumulation_steps = 100
 
     evaluate_every_epoch_mod = 1
-    save_model_every_epoch_mod = 5
+    save_model_every_epoch_mod = 2
 
     # Model
     lm_pretrained_model = "HuggingFaceTB/SmolLM-135M-Instruct"
@@ -87,7 +88,10 @@ wer = load("wer")
 @torch.no_grad()
 def compute_validation_metrics(generations, references):
 
-    wer_score = wer.compute(predictions=generations, references=[ x[0] for x in references ])
+    wer_references = [ x[0] for x in references ]
+    print("generations", generations)
+    print("wer_references", wer_references)
+    wer_score = wer.compute(predictions=generations, references=wer_references)
 
     return {
         "validation/wer": wer_score
@@ -179,7 +183,7 @@ def val_loop(model: TokenizedSpeechLM, tokenizer, val_dataloader: DataLoader, ep
     return validation_metrics
 
 
-def train_loop(accelerator: accelerate.Accelerator, model: TokenizedSpeechLM, optimizer, train_dataloader: DataLoader, epoch, criterion, last_validation_wer=0.0, device=None):
+def train_loop(accelerator: accelerate.Accelerator, model: TokenizedSpeechLM, optimizer, optimizer_lm, train_dataloader: DataLoader, epoch, criterion, last_validation_wer=0.0, device=None):
     model.train()
     progress_bar = tqdm(range(len(train_dataloader)), desc=f'Epoch {epoch}')
     for batch in train_dataloader:
@@ -202,6 +206,7 @@ def train_loop(accelerator: accelerate.Accelerator, model: TokenizedSpeechLM, op
             model.zero_grad()
             accelerator.backward(loss)
             optimizer.step()
+            optimizer_lm.step()
             progress_bar.update(1)
             progress_bar.set_description(f'Epoch={epoch} Loss={loss.item():.3f} WER={last_validation_wer:.3f}')
 
@@ -227,20 +232,22 @@ def train(
         device=None,
         ):
 
-    trainable_parameters = list(model.parameters())
-    optimizer = Adam(trainable_parameters, lr=train_config.learning_rate)
+    trainable_projection_parameters = list(model.projection.parameters()) + list(model.audio_tokens_embeddings.parameters())
+    trainable_lm_parameters = list(model.lm_decoder.parameters())
+    optimizer = Adam(trainable_projection_parameters, lr=train_config.learning_rate)
+    optimizer_lm = Adam(trainable_lm_parameters, lr=train_config.lm_learning_rate)
 
     criterion = nn.CrossEntropyLoss(ignore_index=tokenizer.pad_token_id)
 
     accelerator = accelerate.Accelerator(device_placement=device_placement)
     accelerator.gradient_accumulation_steps = train_config.gradient_accumulation_steps
-    model, optimizer, train_dataloader, val_dataloader = accelerator.prepare(model, optimizer, train_dataloader, val_dataloader)
+    model, optimizer, optimizer_lm, train_dataloader, val_dataloader = accelerator.prepare(model, optimizer, optimizer_lm, train_dataloader, val_dataloader)
 
     last_validation_wer=0.0
 
     for epoch in range(train_config.num_epochs):
 
-        train_loop(accelerator, model, optimizer, train_dataloader, epoch=epoch, criterion=criterion, last_validation_wer=last_validation_wer, device=device)
+        train_loop(accelerator, model, optimizer, optimizer_lm, train_dataloader, epoch=epoch, criterion=criterion, last_validation_wer=last_validation_wer, device=device)
 
         if epoch % train_config.evaluate_every_epoch_mod == 0:
             validation_metrics = val_loop(model, tokenizer, val_dataloader, epoch=epoch, device=device)
@@ -348,7 +355,9 @@ if __name__ == '__main__':
     # lm_decoder_config = AutoConfig.from_pretrained(train_config.lm_pretrained_model)
     # lm_decoder_config.num_hidden_layers = 2
     # lm_decoder = LlamaForCausalLM(lm_decoder_config)
+
     lm_decoder = LlamaForCausalLM.from_pretrained(train_config.lm_pretrained_model)
+    freeze_model(lm_decoder)
     tokenizer = AutoTokenizer.from_pretrained(train_config.lm_pretrained_model)
     lm_decoder.to(device)
 

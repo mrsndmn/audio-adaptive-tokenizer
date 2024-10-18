@@ -94,9 +94,25 @@ class TokenizedSpeechLM(nn.Module):
 
         torch.save(self.projection.state_dict(), os.path.join(save_directory, "projection.pt"))
         torch.save(self.audio_tokens_embeddings.state_dict(), os.path.join(save_directory, "audio_tokens_embeddings.pt"))
-        torch.save(self.lm_decoder.state_dict(), os.path.join(save_directory, "lm_decoder.pt"))
 
+        self.lm_decoder.save_pretrained(save_directory)
         # self.config.save_pretrained(save_directory)
 
         return
 
+    @classmethod
+    def from_pretrained(cls, audio_encoder, lm_model, model_id: str):
+        llaaa_model = cls(audio_encoder, lm_model)
+
+        projection_path = os.path.join(model_id, "projection.pt")
+
+        projection_state = torch.load(projection_path, map_location=torch.device('cpu'))
+        llaaa_model.projection.load_state_dict(projection_state)
+
+        audio_tokens_embeddings_path = os.path.join(model_id, "audio_tokens_embeddings.pt")
+        audio_tokens_embeddings_state = torch.load(audio_tokens_embeddings_path, map_location=torch.device('cpu'))
+        llaaa_model.audio_tokens_embeddings.load_state_dict(audio_tokens_embeddings_state)
+
+        self.lm_decoder.from_pretrained(model_id)
+
+        return llaaa_model
