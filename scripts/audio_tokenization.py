@@ -56,15 +56,10 @@ if __name__ == '__main__':
 
     window_fn = window_function(n_fft, "hann")
 
-    minimal_segment_frames = int(expected_sampling_rate / 40) # 400мс
-    maximum_segment_frames = int(expected_sampling_rate / 2)       # 1с
+    minimal_segment_frames = int(expected_sampling_rate / 40) # 25мс
+    maximum_segment_frames = int(expected_sampling_rate / 2)  # 0.5с
 
     processed_segments = []
-
-    audio_segments_base_path = "./data/audio_segments"
-    if os.path.exists(audio_segments_base_path):
-        shutil.rmtree(audio_segments_base_path)
-    os.makedirs(audio_segments_base_path, exist_ok=True)
 
     audio_segments_embeddings_base_path = "./data/audio_segments_embeddings"
     if os.path.exists(audio_segments_embeddings_base_path):
