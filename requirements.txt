@@ -8,4 +8,8 @@ statsmodels==0.14.4
 torch==2.4.1
 torchaudio==2.4.1
 tqdm==4.66.5
-transformers==4.45.2
+datasets
+statsmodels
+# transformers==4.45.2
+wandb
+jiwer

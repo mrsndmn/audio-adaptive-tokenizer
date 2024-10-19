@@ -76,13 +76,20 @@ class TokenizedSpeechLM(nn.Module):
             if audio_embeds_attention_mask is None:
                 additional_attention_mask = torch.ones([bath_size, audio_tokens_seq_len], device=audio_embeds_projection.device)
             else:
-                audio_tokens_labels_mask = torch.ones([bath_size, 1])
+                audio_tokens_labels_mask = torch.ones([bath_size, 1], device=audio_embeds_projection.device)
                 additional_attention_mask = torch.cat([audio_tokens_labels_mask, audio_embeds_attention_mask, audio_tokens_labels_mask], dim=1)
 
             # мы можем это сделать тк атеншну все равно на какой позиции находятся токены,
             # главное, чтобы они были видны в атеншне
             attention_mask = torch.cat([additional_attention_mask, attention_mask], dim=1)
             assert attention_mask.shape[1] == inputs_embeds.shape[1], f"{attention_mask.shape[1]} == {inputs_embeds.shape[1]}"
+        else:
+            if audio_embeds_attention_mask is None:
+                attention_mask = torch.ones([bath_size, audio_tokens_seq_len], device=audio_embeds_projection.device)
+            else:
+                audio_tokens_labels_mask = torch.ones([bath_size, 1], device=audio_embeds_projection.device)
+                attention_mask = torch.cat([audio_tokens_labels_mask, audio_embeds_attention_mask, audio_tokens_labels_mask], dim=1)
+
 
         return {
             "inputs_embeds":  inputs_embeds,
@@ -106,17 +113,16 @@ class TokenizedSpeechLM(nn.Module):
 
     @classmethod
     def from_pretrained(cls, audio_encoder, lm_model, model_id: str):
-        llaaa_model = cls(audio_encoder, lm_model)
+
+        model = cls(audio_encoder, lm_model)
 
         projection_path = os.path.join(model_id, "projection.pt")
 
         projection_state = torch.load(projection_path, map_location=torch.device('cpu'))
-        llaaa_model.projection.load_state_dict(projection_state)
+        model.projection.load_state_dict(projection_state)
 
         audio_tokens_embeddings_path = os.path.join(model_id, "audio_tokens_embeddings.pt")
         audio_tokens_embeddings_state = torch.load(audio_tokens_embeddings_path, map_location=torch.device('cpu'))
-        llaaa_model.audio_tokens_embeddings.load_state_dict(audio_tokens_embeddings_state)
+        model.audio_tokens_embeddings.load_state_dict(audio_tokens_embeddings_state)
 
-        self.lm_decoder.from_pretrained(model_id)
-
-        return llaaa_model
+        return model

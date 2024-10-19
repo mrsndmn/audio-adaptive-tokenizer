@@ -33,7 +33,7 @@ logging.basicConfig(level=logging.DEBUG, format='%(asctime)s %(levelname)s %(mes
 class TrainConfig:
     log_level = "DEBUG"
     # Training
-    num_epochs = 10
+    num_epochs = 1000
     train_batch_size = 10
     val_batch_size = 1
     log_grad_norm = True
@@ -41,14 +41,14 @@ class TrainConfig:
     lm_learning_rate = 1e-4
     gradient_accumulation_steps = 1
 
-    evaluate_every_epoch_mod = 1
-    save_model_every_epoch_mod = 2
+    evaluate_every_epoch_mod = 50
+    save_model_every_epoch_mod = 50
 
     # Model
     lm_pretrained_model = "HuggingFaceTB/SmolLM-135M-Instruct"
 
     # Data
-    few_train_samples = None
+    few_train_samples = 10
     few_val_samples = 10
     dataloader_num_workers = 0
 
@@ -57,15 +57,17 @@ class TrainConfig:
 
 
 def prepare_model_inputs_from_batch(model: TokenizedSpeechLM, batch, device=None):
-    if 'audio_embeds_last_hidden_state' in batch:
-        audio_embeds_last_hidden_state = batch['audio_embeds_last_hidden_state'].to(device)
+    audio_embeds_last_hidden_state = batch['audio_embeds_last_hidden_state'].to(device)
+    audio_embeds_attention_mask = batch['audio_embeds_attention_mask'].to(device)
 
     inputs_embeds = model.encode_text(batch['input_ids'].to(device))
+    attention_mask = batch['attention_mask'].to(device)
 
     model_inputs_with_audio = model.prepare_audio_inputs(
         inputs_embeds=inputs_embeds,
-        attention_mask=batch['attention_mask'].to(device),
+        attention_mask=attention_mask,
         audio_embeds=audio_embeds_last_hidden_state,
+        audio_embeds_attention_mask=audio_embeds_attention_mask,
     )
 
     return {
@@ -129,8 +131,6 @@ def val_loop(model: TokenizedSpeechLM, tokenizer, val_dataloader: DataLoader, ep
     for batch in tqdm(val_dataloader):
 
         batch_input_ids = batch['input_ids'].to(device)
-        attention_mask = batch['attention_mask'].to(device)
-        audio_embeds_attention_mask = batch['audio_embeds_attention_mask'].to(device)
         caption_legth = batch_input_ids.shape[1]
 
         if not no_loss:
@@ -149,9 +149,11 @@ def val_loop(model: TokenizedSpeechLM, tokenizer, val_dataloader: DataLoader, ep
             num_batches += 1
 
         audio_embeds_last_hidden_state = batch['audio_embeds_last_hidden_state']
+        audio_embeds_attention_mask = batch['audio_embeds_attention_mask']
 
         model_inputs_with_only_audio = model.prepare_audio_inputs(
             audio_embeds=audio_embeds_last_hidden_state,
+            audio_embeds_attention_mask=audio_embeds_attention_mask,
         )
 
         genconfig.max_length = caption_legth
@@ -195,14 +197,27 @@ def train_loop(accelerator: accelerate.Accelerator, model: TokenizedSpeechLM, op
 
             # model_prediction
             batch_input_ids = batch['input_ids'].to(device)
+            batch_input_ids_attention_mask = batch['input_ids_attention_mask'].to(device)
             caption_legth = batch_input_ids.shape[1]
+            # print("caption_legth", caption_legth, "model_prediction.logits.shape", model_prediction.logits.shape)
             model_prediction_caption = model_prediction.logits[:, -caption_legth:-1, :]  # [ bs, caption_length - 1, vocad_size ]
 
             shifted_batch_input_ids = batch_input_ids[:, 1:]  # [ bs, caption_length - 1 ]
+            shifted_input_ids_attention_mask = batch_input_ids_attention_mask[:, 1:]
             # logger.info(f"model_prediction_caption {model_prediction_caption.shape}")
             # logger.info(f"batch_input_ids {shifted_batch_input_ids.shape}")
             model_prediction_caption_flatten = model_prediction_caption.flatten(0, 1)
             input_ids_flatten = shifted_batch_input_ids.flatten(0, 1)
+            input_ids_attention_mask_flatten = shifted_input_ids_attention_mask.flatten(0, 1).bool()
+
+            # do not train to predict pad token
+            model_prediction_caption_flatten = model_prediction_caption_flatten[input_ids_attention_mask_flatten]
+            input_ids_flatten = input_ids_flatten[input_ids_attention_mask_flatten]
+
+            # print("input_ids_attention_mask_flatten", input_ids_attention_mask_flatten.sum(), '/', input_ids_attention_mask_flatten.numel())
+            # print("model_prediction_caption_flatten masked", model_prediction_caption_flatten.shape)
+            # print("input_ids_flatten masked", input_ids_flatten.shape)
+
             loss = criterion(model_prediction_caption_flatten, input_ids_flatten)
 
             model.zero_grad()
@@ -289,10 +304,16 @@ def get_collate_fn(tokenizer, validation=False):
     def collate_fn(items):
         result = dict()
         # random select caption
-        tokenizer_input = [item['text'] for item in items]
+        bos_token = tokenizer.decode(tokenizer.bos_token_id)
+        eos_token = tokenizer.decode(tokenizer.eos_token_id)
+        tokenizer_input = [ bos_token + item['text'] + eos_token for item in items]
         tokenized_caption = tokenizer(tokenizer_input, padding=True)
         result['input_ids'] = torch.tensor(tokenized_caption['input_ids'])
+
+        print("collate result['input_ids']", tokenizer.batch_decode(result['input_ids']))
+
         result['attention_mask'] = torch.tensor(tokenized_caption['attention_mask'])
+        result['input_ids_attention_mask'] = result['attention_mask']
 
         max_length = max(x['audio_embeds_last_hidden_state'].shape[1] for x in items)
         audio_embeds_hidden_dim = items[0]['audio_embeds_last_hidden_state'].shape[-1]
@@ -318,6 +339,8 @@ def get_train_dataloader(train_config: TrainConfig, tokenizer):
     if train_config.few_train_samples is not None:
         audio_stt_dataset = audio_stt_dataset.select(range(train_config.few_train_samples))
 
+    print("train", list(x['text'] for x in audio_stt_dataset))
+
     audio_stt_dataset.set_transform(data_preloader())
     return DataLoader(audio_stt_dataset, collate_fn=get_collate_fn(tokenizer), batch_size=train_config.train_batch_size, num_workers=train_config.dataloader_num_workers, shuffle=True, drop_last=True)
 
@@ -327,6 +350,7 @@ def get_val_dataloader(train_config: TrainConfig, tokenizer):
     if train_config.few_val_samples is not None:
         audio_stt_dataset = audio_stt_dataset.select(range(train_config.few_val_samples))
 
+    print("val", list(x['text'] for x in audio_stt_dataset))
     audio_stt_dataset.set_transform(data_preloader())
 
     return DataLoader(audio_stt_dataset,
@@ -366,16 +390,22 @@ if __name__ == '__main__':
 
     logger.info("load language model")
 
-    lm_decoder_config = AutoConfig.from_pretrained(train_config.lm_pretrained_model)
-    lm_decoder_config.num_hidden_layers = 2
-    lm_decoder = LlamaForCausalLM(lm_decoder_config)
+    # lm_decoder_config = AutoConfig.from_pretrained(train_config.lm_pretrained_model)
+    # lm_decoder_config.num_hidden_layers = 2
+    # lm_decoder = LlamaForCausalLM(lm_decoder_config)
+
+    lm_decoder = LlamaForCausalLM.from_pretrained("data/models/hearty-shadow-9/last")
 
     # lm_decoder = LlamaForCausalLM.from_pretrained(train_config.lm_pretrained_model)
     # freeze_model(lm_decoder)
+
     tokenizer = AutoTokenizer.from_pretrained(train_config.lm_pretrained_model)
+    tokenizer.add_bos_token = True
+    tokenizer.add_eos_token = True
     lm_decoder.to(device)
 
-    model = TokenizedSpeechLM(None, lm_decoder)
+    model = TokenizedSpeechLM.from_pretrained(None, lm_decoder, 'data/models/hearty-shadow-9/last')
+    model.to(device)
 
     logger.info("model was loaded")
 
@@ -404,5 +434,5 @@ if __name__ == '__main__':
             val_dataloader=val_dataloader,
             train_config=train_config,
             device=device,
-            device_placement=False,
+            device_placement=True,
         )

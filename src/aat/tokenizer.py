@@ -121,13 +121,6 @@ class AdaptiveAudioAmplitudeTokenizer():
         melspec_mean_amplitude_lowess = sm.nonparametric.lowess(melspec_mean_amplitude, np.arange(len(melspec_mean_amplitude)), frac=0.008)
         melspec_mean_amplitude_lowess = melspec_mean_amplitude_lowess[:, 1] # shape (seq_len)
 
-        import matplotlib.pyplot as plt
-        plt.imshow(melspec)
-        plt.plot(melspec_mean_amplitude, label="ampl")
-        plt.plot(melspec_mean_amplitude_lowess, label="lowess")
-        plt.legend()
-        plt.savefig("./melspec.png")
-
         # append the last frame as last segment end
         segments_boarders = item_waveform_minimas.tolist() + [ audio_waveform.shape[-1] ]
 
