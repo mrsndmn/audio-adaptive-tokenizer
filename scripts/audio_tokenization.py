@@ -31,21 +31,21 @@ if __name__ == '__main__':
     print("device", device)
     model.to(device)
 
-    dataset_files = [ f'libris/train-{i:05}-of-00064.parquet' for i in range(10) ] # 10 gb of data
-    print("dataset_files", dataset_files)
-    audio_dataset = load_dataset("nguyenvulebinh/asr-alignment", split=datasets.Split.TRAIN, data_files=dataset_files)
+    # dataset_files = [ f'libris/train-{i:05}-of-00064.parquet' for i in range(65) ] # 1 shard = 1 gb of data
+    # print("dataset_files", dataset_files)
+    audio_dataset = load_dataset("nguyenvulebinh/asr-alignment", 'libris', split=datasets.Split.TRAIN, streaming=True)
     audio_dataset.cast_column('audio', datasets.Audio(sampling_rate=expected_sampling_rate))
 
     audio_tokenizer = AdaptiveAudioAmplitudeTokenizer()
 
     processed_segments = []
 
-    audio_segments_embeddings_base_path = "./data/audio_segments_embeddings"
+    audio_segments_embeddings_base_path = "./data/audio_segments_embeddings_mean_full"
     if os.path.exists(audio_segments_embeddings_base_path):
         shutil.rmtree(audio_segments_embeddings_base_path)
     os.makedirs(audio_segments_embeddings_base_path, exist_ok=True)
 
-    for item in tqdm(audio_dataset):
+    for item in tqdm(audio_dataset, total=288000):
         audio_waveform = item['audio']['array']
 
         awf_sr = AudioWaveform(audio_waveform, item['audio']['sampling_rate'])
@@ -54,6 +54,7 @@ if __name__ == '__main__':
 
         segments_embeddings = []
         segments_frames = []
+
         for i, audio_segment_wf_sr in enumerate(item_audio_segments):
             item_audio_segment = audio_segment_wf_sr.waveform
 
@@ -66,10 +67,12 @@ if __name__ == '__main__':
             ).input_values
             hidden_states = model(input_values.to(torch.float16).to(device)).last_hidden_state
 
-            segments_embeddings.append(hidden_states)
+            segments_embeddings.append(hidden_states.mean(dim=1, keepdim=True))
 
         segments_embeddings_file = os.path.join(audio_segments_embeddings_base_path, item['id'] + ".pt")
-        torch.save(segments_embeddings, segments_embeddings_file)
+
+        averaged_hubert_embeddings_t = torch.cat(segments_embeddings, dim=1) # [ 1, seq_length, 768 ]
+        torch.save(averaged_hubert_embeddings_t, segments_embeddings_file)
 
         processed_segments.append({
             "id": item["id"],
@@ -81,4 +84,4 @@ if __name__ == '__main__':
 
     segmented_dataset = Dataset.from_list(processed_segments)
     segmented_dataset = segmented_dataset.cast_column("audio", Audio(sampling_rate=expected_sampling_rate))
-    segmented_dataset.save_to_disk('data/segments.dataset')
+    segmented_dataset.save_to_disk('data/segment_full.dataset')

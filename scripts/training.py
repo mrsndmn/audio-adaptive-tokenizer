@@ -35,7 +35,7 @@ class TrainConfig:
     # Training
     num_epochs = 100
     train_batch_size = 10
-    val_batch_size = 50
+    val_batch_size = 1
     log_grad_norm = True
     learning_rate = 1e-4
     lm_learning_rate = 1e-4
@@ -49,7 +49,7 @@ class TrainConfig:
 
     # Data
     few_train_samples = None
-    few_val_samples = None
+    few_val_samples = 100
     dataloader_num_workers = 0
 
     train_dataset_path = "./data/segments.dataset"
@@ -88,20 +88,33 @@ from evaluate import load
 wer = load("wer")
 
 @torch.no_grad()
-def compute_validation_metrics(generations, references):
+def compute_validation_metrics(generations, references, captioning_metrics=None):
 
     wer_references = [ x[0] for x in references ]
     print("generations", generations)
     print("wer_references", wer_references)
     wer_score = wer.compute(predictions=generations, references=wer_references)
 
-    return {
+    validation_metrics = {
         "validation/wer": wer_score
     }
 
+    if captioning_metrics is not None:
+        evaluate_bleu_results = captioning_metrics.compute(predictions=generations, references=references)
+        logger.info(f"evaluate_bleu_results {evaluate_bleu_results}")
+
+        validation_metrics["validation/evaluate_bleu"] = evaluate_bleu_results['bleu'] * 100
+        validation_metrics["validation/evaluate_rouge1"] = evaluate_bleu_results['rouge1']
+        validation_metrics["validation/evaluate_rouge2"] = evaluate_bleu_results['rouge2']
+        validation_metrics["validation/evaluate_rougeL"] = evaluate_bleu_results['rougeL']
+        validation_metrics["validation/evaluate_rougeLsum"] = evaluate_bleu_results['rougeLsum']
+        validation_metrics["validation/evaluate_meteor"] = evaluate_bleu_results['meteor']
+
+    return validation_metrics
+
 
 @torch.no_grad()
-def val_loop(model: TokenizedSpeechLM, tokenizer, val_dataloader: DataLoader, epoch, no_loss=False, device=None):
+def val_loop(model: TokenizedSpeechLM, tokenizer, val_dataloader: DataLoader, epoch, no_loss=False, device=None, captioning_metrics=None):
 
     criterion = nn.CrossEntropyLoss(ignore_index=tokenizer.pad_token_id)
 
@@ -160,11 +173,11 @@ def val_loop(model: TokenizedSpeechLM, tokenizer, val_dataloader: DataLoader, ep
             audio_embeds_attention_mask=audio_embeds_attention_mask,
         )
 
-        genconfig.max_length = caption_legth - 1
+        genconfig.max_length = caption_legth + 10
 
         all_generation_params = {
             'generation_config': genconfig,
-            'max_new_tokens': caption_legth - 1,
+            'max_new_tokens': caption_legth + 10,
             **model_inputs_with_only_audio,
             **gen_params,
         }
@@ -185,8 +198,10 @@ def val_loop(model: TokenizedSpeechLM, tokenizer, val_dataloader: DataLoader, ep
     assert len(generations) > 0, f"len(generations)={len(generations)}"
     assert len(target_generations) == len(generations), f"len(target_generations) == len(generations): {len(target_generations)} == {len(generations)}"
 
-    validation_metrics = compute_validation_metrics(generations, target_generations)
+    validation_metrics = compute_validation_metrics(generations, target_generations, captioning_metrics=captioning_metrics)
     validation_metrics["validation/loss"] = sumloss / (num_batches + 1e-5)
+
+    breakpoint()
 
     return validation_metrics
 
@@ -251,6 +266,7 @@ def train(
         metric_logger: wandb_sdk.wandb_run.Run,
         device_placement=True,
         device=None,
+        captioning_metrics=None,
         ):
 
     trainable_projection_parameters = list(model.projection.parameters()) + list(model.audio_tokens_embeddings.parameters())
@@ -271,7 +287,7 @@ def train(
         train_loop(accelerator, model, optimizer, optimizer_lm, train_dataloader, epoch=epoch, criterion=criterion, last_validation_wer=last_validation_wer, device=device)
 
         if epoch % train_config.evaluate_every_epoch_mod == 0:
-            validation_metrics = val_loop(model, tokenizer, val_dataloader, epoch=epoch, device=device)
+            validation_metrics = val_loop(model, tokenizer, val_dataloader, epoch=epoch, device=device, captioning_metrics=captioning_metrics)
             logger.info(f"validation metrics {validation_metrics}")
             last_validation_wer = validation_metrics['validation/wer']
 
@@ -294,10 +310,9 @@ def data_preloader():
         }
 
         for audio_embeds_path in items["segments_embeddings_path"]:
-            audio_embeds = torch.load(audio_embeds_path, weights_only=True)
-            averaged_hubert_embeddings_list = [ x.mean(dim=1, keepdim=True).to(torch.float32) for x in audio_embeds ]
-            averaged_hubert_embeddings_t = torch.cat(averaged_hubert_embeddings_list, dim=1) # [ 1, seq_length, 768 ]
-            result["audio_embeds_last_hidden_state"].append(averaged_hubert_embeddings_t)
+            audio_embeds_path = audio_embeds_path.replace('/audio_segments_embeddings/', '/audio_segments_embeddings_mean/')
+            audio_embeds = torch.load(audio_embeds_path, weights_only=True) # [ 1, tokens_count (seq_len), 768 ]
+            result["audio_embeds_last_hidden_state"].append(audio_embeds)
 
         return result
 
@@ -367,24 +382,27 @@ def freeze_model(model):
     return
 
 
-def get_model(train_config: TrainConfig, slm_from_pretrained=None, device=None):
+def get_model(train_config: TrainConfig, from_pretrained=None, device=None):
     # lm_decoder_config = AutoConfig.from_pretrained(train_config.lm_pretrained_model)
     # lm_decoder_config.num_hidden_layers = 2
     # lm_decoder = LlamaForCausalLM(lm_decoder_config)
 
     # lm_decoder = LlamaForCausalLM.from_pretrained("data/models/hearty-shadow-9/last")
 
-    lm_decoder = LlamaForCausalLM.from_pretrained(train_config.lm_pretrained_model)
     # freeze_model(lm_decoder)
 
     tokenizer = AutoTokenizer.from_pretrained(train_config.lm_pretrained_model)
     tokenizer.add_bos_token = True
     tokenizer.add_eos_token = True
-    lm_decoder.to(device)
 
-    if slm_from_pretrained is not None:
-        model = TokenizedSpeechLM.from_pretrained(None, lm_decoder, slm_from_pretrained)
+    if from_pretrained is not None:
+        lm_decoder = LlamaForCausalLM.from_pretrained(from_pretrained)
+        lm_decoder.to(device)
+
+        model = TokenizedSpeechLM.from_pretrained(None, lm_decoder, from_pretrained)
     else:
+        lm_decoder = LlamaForCausalLM.from_pretrained(train_config.lm_pretrained_model)
+        lm_decoder.to(device)
         model = TokenizedSpeechLM(None, lm_decoder)
 
     model.to(device)
@@ -445,6 +463,14 @@ if __name__ == '__main__':
     train_dataloader, val_dataloader = get_dataloaders(train_config, tokenizer)
 
     logger.info("run training")
+
+    captioning_metrics = evaluate.combine(
+        [
+            evaluate.load("bleu", keep_in_memory=True),
+            evaluate.load("rouge", keep_in_memory=True),
+            evaluate.load("meteor", keep_in_memory=True),
+        ]
+    )
 
     with wandb.init(project="tokenized_speech_lm") as metric_logger:
         train(
