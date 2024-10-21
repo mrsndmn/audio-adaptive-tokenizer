@@ -31,7 +31,9 @@ if __name__ == '__main__':
     print("device", device)
     model.to(device)
 
-    audio_dataset = load_dataset("nguyenvulebinh/asr-alignment", split=datasets.Split.TRAIN, data_files=['libris/train-00001-of-00064.parquet'])
+    dataset_files = [ f'libris/train-{i:05}-of-00064.parquet' for i in range(10) ] # 10 gb of data
+    print("dataset_files", dataset_files)
+    audio_dataset = load_dataset("nguyenvulebinh/asr-alignment", split=datasets.Split.TRAIN, data_files=dataset_files)
     audio_dataset.cast_column('audio', datasets.Audio(sampling_rate=expected_sampling_rate))
 
     audio_tokenizer = AdaptiveAudioAmplitudeTokenizer()
@@ -43,7 +45,7 @@ if __name__ == '__main__':
         shutil.rmtree(audio_segments_embeddings_base_path)
     os.makedirs(audio_segments_embeddings_base_path, exist_ok=True)
 
-    for item in tqdm(audio_dataset.select(range(1500))):
+    for item in tqdm(audio_dataset):
         audio_waveform = item['audio']['array']
 
         awf_sr = AudioWaveform(audio_waveform, item['audio']['sampling_rate'])
