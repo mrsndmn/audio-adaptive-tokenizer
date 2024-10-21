@@ -9,3 +9,5 @@ print(df['id'].value_counts())
 
 print("\nTotal count of segments")
 print(len(df))
+
+breakpoint()

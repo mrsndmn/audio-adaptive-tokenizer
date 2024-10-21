@@ -57,7 +57,7 @@ class AdaptiveAudioAmplitudeTokenizer():
             melspec (np.ndarray of shape `(num_mel_filters, seq_len)`): Melspectrogram
 
         Returns:
-            minimas (`np.array` of shape `(num_minimas)`): Array of minimas points of amplmitude
+            minimas (`np.array` of shape `(num_minimas)`): Array of minimas points of amplmitude at melspec
         """
 
         # Averaging over frequency dimension
@@ -115,11 +115,7 @@ class AdaptiveAudioAmplitudeTokenizer():
         melspec = self.get_melspec(audio_waveform)
 
         melspec_minimas = self.find_amplitude_minimas(melspec)
-        item_waveform_minimas = - 10 * melspec_minimas * self.hop_length
-
-        melspec_mean_amplitude = melspec.mean(axis=0) # shape (seq_len)
-        melspec_mean_amplitude_lowess = sm.nonparametric.lowess(melspec_mean_amplitude, np.arange(len(melspec_mean_amplitude)), frac=0.008)
-        melspec_mean_amplitude_lowess = melspec_mean_amplitude_lowess[:, 1] # shape (seq_len)
+        item_waveform_minimas = melspec_minimas * self.hop_length # move to waveform space
 
         # append the last frame as last segment end
         segments_boarders = item_waveform_minimas.tolist() + [ audio_waveform.shape[-1] ]

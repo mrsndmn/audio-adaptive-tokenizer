@@ -31,21 +31,22 @@ if __name__ == '__main__':
     print("device", device)
     model.to(device)
 
-    # dataset_files = [ f'libris/train-{i:05}-of-00064.parquet' for i in range(65) ] # 1 shard = 1 gb of data
-    # print("dataset_files", dataset_files)
-    audio_dataset = load_dataset("nguyenvulebinh/asr-alignment", 'libris', split=datasets.Split.TRAIN, streaming=True)
+    dataset_files = [ f'libris/train-{i:05}-of-00064.parquet' for i in range(10) ] # 1 shard = 1 gb of data
+    print("dataset_files", dataset_files)
+    audio_dataset = load_dataset("nguyenvulebinh/asr-alignment", split=datasets.Split.TRAIN, data_files=dataset_files, streaming=True)
+    # audio_dataset = load_dataset("nguyenvulebinh/asr-alignment", 'libris', split=datasets.Split.TRAIN, streaming=True)
     audio_dataset.cast_column('audio', datasets.Audio(sampling_rate=expected_sampling_rate))
 
     audio_tokenizer = AdaptiveAudioAmplitudeTokenizer()
 
     processed_segments = []
 
-    audio_segments_embeddings_base_path = "./data/audio_segments_embeddings_mean_full"
+    audio_segments_embeddings_base_path = "./data/audio_segments_embeddings_mean_tokenized"
     if os.path.exists(audio_segments_embeddings_base_path):
         shutil.rmtree(audio_segments_embeddings_base_path)
     os.makedirs(audio_segments_embeddings_base_path, exist_ok=True)
 
-    for item in tqdm(audio_dataset, total=288000):
+    for item in tqdm(audio_dataset, total=int(288000*10/64)):
         audio_waveform = item['audio']['array']
 
         awf_sr = AudioWaveform(audio_waveform, item['audio']['sampling_rate'])
@@ -55,19 +56,29 @@ if __name__ == '__main__':
         segments_embeddings = []
         segments_frames = []
 
-        for i, audio_segment_wf_sr in enumerate(item_audio_segments):
-            item_audio_segment = audio_segment_wf_sr.waveform
+        segments_step = 100
+        for i in range(0, len(item_audio_segments), segments_step):
 
-            segments_frames.append(item_audio_segment.shape[-1])
+            batch_waveforms = [ item_audio_segments[i+j].waveform for j in range(min(segments_step, len(item_audio_segments) - i)) ]
 
-            input_values = processor(
-                item_audio_segment,
+            segments_frames.extend([ seg.shape[-1] for seg in batch_waveforms ])
+
+            batch_input_values = processor(
+                batch_waveforms,
                 sampling_rate=expected_sampling_rate,
-                return_tensors="pt"
+                return_tensors="pt",
+                padding=True,
             ).input_values
-            hidden_states = model(input_values.to(torch.float16).to(device)).last_hidden_state
 
-            segments_embeddings.append(hidden_states.mean(dim=1, keepdim=True))
+            hidden_states = model(batch_input_values.to(torch.float16).to(device)).last_hidden_state
+
+            # todo remove padding before mean
+            # [ bs, 1, 768 ]
+            hidden_states = hidden_states.mean(dim=1, keepdim=True)
+            # [ 1, bs, 768 ]
+            hidden_states = hidden_states.permute(1, 0, 2)
+
+            segments_embeddings.append(hidden_states)
 
         segments_embeddings_file = os.path.join(audio_segments_embeddings_base_path, item['id'] + ".pt")
 
@@ -84,4 +95,4 @@ if __name__ == '__main__':
 
     segmented_dataset = Dataset.from_list(processed_segments)
     segmented_dataset = segmented_dataset.cast_column("audio", Audio(sampling_rate=expected_sampling_rate))
-    segmented_dataset.save_to_disk('data/segment_full.dataset')
+    segmented_dataset.save_to_disk('data/segments_tokenized_10_of_64.dataset')
