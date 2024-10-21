@@ -25,6 +25,17 @@ class TokenizedSpeechLM(nn.Module):
 
         return
 
+    def reinitialize_weights(self, std=0.02):
+        nn.init.normal_(self.projection[0].weight, mean=0, std=std)
+        nn.init.constant_(self.projection[0].bias, 0)
+        nn.init.normal_(self.projection[2].weight, mean=0, std=std)
+        nn.init.constant_(self.projection[2].bias, 0)
+
+        nn.init.normal_(self.audio_tokens_embeddings.weight, mean=0, std=std)
+
+        return
+
+
     def prepare_audio_embeddings(self, audio_embeds):
         audio_embeddings = F.normalize(audio_embeddings, dim=-1)
         return self.lm_adapter(audio_embeds)

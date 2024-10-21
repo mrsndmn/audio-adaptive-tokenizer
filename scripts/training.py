@@ -39,7 +39,7 @@ class TrainConfig:
     log_grad_norm = True
     learning_rate = 1e-4
     lm_learning_rate = 1e-4
-    gradient_accumulation_steps = 1
+    # gradient_accumulation_steps = 1
 
     evaluate_every_epoch_mod = 5
     save_model_every_epoch_mod = 5
@@ -207,49 +207,75 @@ def val_loop(model: TokenizedSpeechLM, tokenizer, val_dataloader: DataLoader, ep
 def train_loop(accelerator: accelerate.Accelerator, model: TokenizedSpeechLM, optimizer, optimizer_lm, train_dataloader: DataLoader, epoch, criterion, last_validation_wer=0.0, device=None):
     model.train()
     progress_bar = tqdm(range(len(train_dataloader)), desc=f'Epoch {epoch}')
-    for batch in train_dataloader:
-        with accelerator.accumulate(model):
-            model_inputs_with_audio = prepare_model_inputs_from_batch(model, batch)
-            model_prediction = model.forward(**model_inputs_with_audio)
+    for batch_i, batch in enumerate(train_dataloader):
+        model_inputs_with_audio = prepare_model_inputs_from_batch(model, batch)
+        model_prediction = model.forward(**model_inputs_with_audio)
 
-            # model_prediction
-            batch_input_ids = batch['input_ids'].to(device)
-            batch_input_ids_attention_mask = batch['input_ids_attention_mask'].to(device)
-            caption_legth = batch_input_ids.shape[1]
-            # print("caption_legth", caption_legth, "model_prediction.logits.shape", model_prediction.logits.shape)
-            model_prediction_caption = model_prediction.logits[:, -caption_legth:-1, :]  # [ bs, caption_length - 1, vocad_size ]
+        # model_prediction
+        batch_input_ids = batch['input_ids'].to(device)
+        batch_input_ids_attention_mask = batch['input_ids_attention_mask'].to(device)
+        caption_legth = batch_input_ids.shape[1]
+        # print("caption_legth", caption_legth, "model_prediction.logits.shape", model_prediction.logits.shape)
+        model_prediction_caption = model_prediction.logits[:, -caption_legth:-1, :]  # [ bs, caption_length - 1, vocad_size ]
 
-            shifted_batch_input_ids = batch_input_ids[:, 1:]  # [ bs, caption_length - 1 ]
-            shifted_input_ids_attention_mask = batch_input_ids_attention_mask[:, 1:]
-            # logger.info(f"model_prediction_caption {model_prediction_caption.shape}")
-            # logger.info(f"batch_input_ids {shifted_batch_input_ids.shape}")
-            model_prediction_caption_flatten = model_prediction_caption.flatten(0, 1)
-            input_ids_flatten = shifted_batch_input_ids.flatten(0, 1)
-            input_ids_attention_mask_flatten = shifted_input_ids_attention_mask.flatten(0, 1).bool()
+        shifted_batch_input_ids = batch_input_ids[:, 1:]  # [ bs, caption_length - 1 ]
+        shifted_input_ids_attention_mask = batch_input_ids_attention_mask[:, 1:]
+        # logger.info(f"model_prediction_caption {model_prediction_caption.shape}")
+        # logger.info(f"batch_input_ids {shifted_batch_input_ids.shape}")
+        model_prediction_caption_flatten = model_prediction_caption.flatten(0, 1)
+        input_ids_flatten = shifted_batch_input_ids.flatten(0, 1)
+        input_ids_attention_mask_flatten = shifted_input_ids_attention_mask.flatten(0, 1).bool()
 
-            # do not train to predict pad token
-            model_prediction_caption_flatten = model_prediction_caption_flatten[input_ids_attention_mask_flatten]
-            input_ids_flatten = input_ids_flatten[input_ids_attention_mask_flatten]
+        # do not train to predict pad token
+        model_prediction_caption_flatten = model_prediction_caption_flatten[input_ids_attention_mask_flatten]
+        input_ids_flatten = input_ids_flatten[input_ids_attention_mask_flatten]
 
-            # print("input_ids_attention_mask_flatten", input_ids_attention_mask_flatten.sum(), '/', input_ids_attention_mask_flatten.numel())
-            # print("model_prediction_caption_flatten masked", model_prediction_caption_flatten.shape)
-            # print("input_ids_flatten masked", input_ids_flatten.shape)
+        # print("input_ids_attention_mask_flatten", input_ids_attention_mask_flatten.sum(), '/', input_ids_attention_mask_flatten.numel())
+        # print("model_prediction_caption_flatten masked", model_prediction_caption_flatten.shape)
+        # print("input_ids_flatten masked", input_ids_flatten.shape)
 
-            loss = criterion(model_prediction_caption_flatten, input_ids_flatten)
+        loss = criterion(model_prediction_caption_flatten, input_ids_flatten)
 
-            model.zero_grad()
-            accelerator.backward(loss)
-            optimizer.step()
+        step_metrics = {"train_loss": loss.item(), "epoch": epoch}
+
+        model.zero_grad()
+        projection_grad_norm = 0
+        audio_tokens_embeddings_grad_norm = 0
+        if model.projection[0].weight.grad is not None:
+            projection_grad_norm = model.projection[0].weight.grad.norm(2)
+        if model.audio_tokens_embeddings.weight.grad is not None:
+            audio_tokens_embeddings_grad_norm = model.audio_tokens_embeddings.weight.grad.norm(2)
+        step_metrics["zg_grad_norm/projection_grad_norm"] = projection_grad_norm
+        step_metrics["zg_grad_norm/audio_tokens_embeddings_grad_norm"] = audio_tokens_embeddings_grad_norm
+
+        if model.lm_decoder.lm_head.weight.grad is not None:
+            lm_head_grad_norm = model.lm_decoder.lm_head.weight.grad.norm(2)
+            step_metrics["zg_grad_norm/lm_head_grad_norm"] = lm_head_grad_norm
+
+        loss.backward()
+
+        optimizer.step()
+
+        if epoch == 0 and batch_i < 100:
+            # пропускаем первые 100 шагов оптимизации для lm_decoder'а
+            pass
+        else:
             optimizer_lm.step()
-            progress_bar.update(1)
-            progress_bar.set_description(f'Epoch={epoch} Loss={loss.item():.3f} WER={last_validation_wer:.3f}')
 
-            step_metrics = {"train_loss": loss.item(), "epoch": epoch}
-            if train_config.log_grad_norm:
-                pass
+        progress_bar.update(1)
+        progress_bar.set_description(f'Epoch={epoch} Loss={loss.item():.3f} WER={last_validation_wer:.3f}')
 
-            metric_logger.log(step_metrics)
-            # end accelerator accumulation
+        if train_config.log_grad_norm:
+            projection_grad_norm = model.projection[0].weight.grad.norm(2)
+            audio_tokens_embeddings_grad_norm = model.audio_tokens_embeddings.weight.grad.norm(2)
+            step_metrics["grad_norm/projection_grad_norm"] = projection_grad_norm
+            step_metrics["grad_norm/audio_tokens_embeddings_grad_norm"] = audio_tokens_embeddings_grad_norm
+
+            if model.lm_decoder.lm_head.weight.grad is not None:
+                lm_head_grad_norm = model.lm_decoder.lm_head.weight.grad.norm(2)
+                step_metrics["grad_norm/lm_head_grad_norm"] = lm_head_grad_norm
+
+        metric_logger.log(step_metrics)
         # end train loop
 
     return
@@ -272,16 +298,18 @@ def train(
     optimizer = Adam(trainable_projection_parameters, lr=train_config.learning_rate)
     optimizer_lm = Adam(trainable_lm_parameters, lr=train_config.lm_learning_rate)
 
-    criterion = nn.CrossEntropyLoss(ignore_index=tokenizer.pad_token_id)
+    # Иногда pad_token_id == eos_token_id,
+    # но мы хотим, чтобы модель умела предсказывать eos_token_id
+    # ignore_index=tokenizer.pad_token_id
+    criterion = nn.CrossEntropyLoss()
 
     accelerator = accelerate.Accelerator(device_placement=device_placement)
-    accelerator.gradient_accumulation_steps = train_config.gradient_accumulation_steps
+    # accelerator.gradient_accumulation_steps = train_config.gradient_accumulation_steps
     model, optimizer, optimizer_lm, train_dataloader, val_dataloader = accelerator.prepare(model, optimizer, optimizer_lm, train_dataloader, val_dataloader)
 
     last_validation_wer=0.0
 
     for epoch in range(train_config.num_epochs):
-
         train_loop(accelerator, model, optimizer, optimizer_lm, train_dataloader, epoch=epoch, criterion=criterion, last_validation_wer=last_validation_wer, device=device)
 
         if epoch % train_config.evaluate_every_epoch_mod == 0:
@@ -379,6 +407,11 @@ def freeze_model(model):
         p.requires_grad = False
     return
 
+def unfreeze_model(model):
+    for p in model.parameters():
+        p.requires_grad = True
+    return
+
 
 def get_model(train_config: TrainConfig, from_pretrained=None, device=None):
     # lm_decoder_config = AutoConfig.from_pretrained(train_config.lm_pretrained_model)
@@ -402,6 +435,8 @@ def get_model(train_config: TrainConfig, from_pretrained=None, device=None):
         lm_decoder = LlamaForCausalLM.from_pretrained(train_config.lm_pretrained_model)
         lm_decoder.to(device)
         model = TokenizedSpeechLM(None, lm_decoder)
+
+        model.reinitialize_weights()
 
     model.to(device)
 
@@ -449,7 +484,7 @@ if __name__ == '__main__':
 
     logger.info("load language model")
 
-    model, tokenizer = get_model(train_config, from_pretrained="data/models/gallant-river-24/last", device=device)
+    model, tokenizer = get_model(train_config, device=device)
 
     logger.info("model was loaded")
 
