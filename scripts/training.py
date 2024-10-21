@@ -33,13 +33,13 @@ logging.basicConfig(level=logging.DEBUG, format='%(asctime)s %(levelname)s %(mes
 class TrainConfig:
     log_level = "DEBUG"
     # Training
-    num_epochs = 100
-    train_batch_size = 10
+    num_epochs = 25
+    train_batch_size = 20
     val_batch_size = 1
     log_grad_norm = True
     learning_rate = 1e-4
     lm_learning_rate = 1e-4
-    gradient_accumulation_steps = 2
+    gradient_accumulation_steps = 1
 
     evaluate_every_epoch_mod = 5
     save_model_every_epoch_mod = 5
@@ -52,8 +52,8 @@ class TrainConfig:
     few_val_samples = 100
     dataloader_num_workers = 0
 
-    train_dataset_path = "./data/segments.dataset"
-    validation_dataset_path = "./data/segments.dataset"
+    train_dataset_path = "./data/segments_tokenized_10_of_64.dataset"
+    validation_dataset_path = "./data/segments_tokenized_10_of_64.dataset"
 
 
 def prepare_model_inputs_from_batch(model: TokenizedSpeechLM, batch, device=None):
@@ -200,8 +200,6 @@ def val_loop(model: TokenizedSpeechLM, tokenizer, val_dataloader: DataLoader, ep
 
     validation_metrics = compute_validation_metrics(generations, target_generations, captioning_metrics=captioning_metrics)
     validation_metrics["validation/loss"] = sumloss / (num_batches + 1e-5)
-
-    breakpoint()
 
     return validation_metrics
 
@@ -451,7 +449,7 @@ if __name__ == '__main__':
 
     logger.info("load language model")
 
-    model, tokenizer = get_model(train_config, device=device)
+    model, tokenizer = get_model(train_config, from_pretrained="data/models/gallant-river-24/last", device=device)
 
     logger.info("model was loaded")
 
