@@ -37,8 +37,8 @@ class TokenizedSpeechLM(nn.Module):
 
 
     def prepare_audio_embeddings(self, audio_embeds):
-        audio_embeddings = F.normalize(audio_embeddings, dim=-1)
-        return self.lm_adapter(audio_embeds)
+        audio_embeds = F.normalize(audio_embeds, dim=-1)
+        return self.projection(audio_embeds)
 
     def forward(self, input_ids=None, inputs_embeds=None, attention_mask=None):
         return self.lm_decoder.forward(input_ids=input_ids, inputs_embeds=inputs_embeds, attention_mask=attention_mask)
@@ -59,7 +59,7 @@ class TokenizedSpeechLM(nn.Module):
         if audio_embeds is None:
             raise Exception("no audio embeds")
 
-        audio_embeds_projection = self.projection(audio_embeds)
+        audio_embeds_projection = self.prepare_audio_embeddings(audio_embeds)
 
         bath_size = audio_embeds_projection.shape[0]
 

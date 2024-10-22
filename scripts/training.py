@@ -39,7 +39,7 @@ class TrainConfig:
     log_grad_norm = True
     learning_rate = 1e-4
     lm_learning_rate = 1e-4
-    # gradient_accumulation_steps = 1
+    # gradient_accumulation_steps = 2
 
     evaluate_every_epoch_mod = 5
     save_model_every_epoch_mod = 5
@@ -48,7 +48,7 @@ class TrainConfig:
     lm_pretrained_model = "HuggingFaceTB/SmolLM-135M-Instruct"
 
     # Data
-    few_train_samples = None
+    few_train_samples = 20000
     few_val_samples = 100
     dataloader_num_workers = 0
 
@@ -207,8 +207,13 @@ def val_loop(model: TokenizedSpeechLM, tokenizer, val_dataloader: DataLoader, ep
 def train_loop(accelerator: accelerate.Accelerator, model: TokenizedSpeechLM, optimizer, optimizer_lm, train_dataloader: DataLoader, epoch, criterion, last_validation_wer=0.0, device=None):
     model.train()
     progress_bar = tqdm(range(len(train_dataloader)), desc=f'Epoch {epoch}')
+
     for batch_i, batch in enumerate(train_dataloader):
-        model_inputs_with_audio = prepare_model_inputs_from_batch(model, batch)
+        # with accelerator.accumulate(model):
+        model_inputs_with_audio = prepare_model_inputs_from_batch(model, batch, device=device)
+
+        # print("model_inputs_with_audio", model_inputs_with_audio['attention_mask'])
+
         model_prediction = model.forward(**model_inputs_with_audio)
 
         # model_prediction
@@ -253,11 +258,23 @@ def train_loop(accelerator: accelerate.Accelerator, model: TokenizedSpeechLM, op
             step_metrics["zg_grad_norm/lm_head_grad_norm"] = lm_head_grad_norm
 
         loss.backward()
+        # accelerator.backward(loss)
+
+        if model.projection[0].weight.grad is not None:
+            projection_grad_norm = model.projection[0].weight.grad.norm(2)
+        if model.audio_tokens_embeddings.weight.grad is not None:
+            audio_tokens_embeddings_grad_norm = model.audio_tokens_embeddings.weight.grad.norm(2)
+        step_metrics["before_step_grad_norm/projection_grad_norm"] = projection_grad_norm
+        step_metrics["before_step_grad_norm/audio_tokens_embeddings_grad_norm"] = audio_tokens_embeddings_grad_norm
+
+        if model.lm_decoder.lm_head.weight.grad is not None:
+            lm_head_grad_norm = model.lm_decoder.lm_head.weight.grad.norm(2)
+            step_metrics["before_step_grad_norm/lm_head_grad_norm"] = lm_head_grad_norm
 
         optimizer.step()
 
-        if epoch == 0 and batch_i < 100:
-            # пропускаем первые 100 шагов оптимизации для lm_decoder'а
+        if epoch == 0 and batch_i < 500:
+            # пропускаем первые 500 шагов оптимизации для lm_decoder'а
             pass
         else:
             optimizer_lm.step()
@@ -305,7 +322,7 @@ def train(
 
     accelerator = accelerate.Accelerator(device_placement=device_placement)
     # accelerator.gradient_accumulation_steps = train_config.gradient_accumulation_steps
-    model, optimizer, optimizer_lm, train_dataloader, val_dataloader = accelerator.prepare(model, optimizer, optimizer_lm, train_dataloader, val_dataloader)
+    # model, optimizer, optimizer_lm, train_dataloader, val_dataloader = accelerator.prepare(model, optimizer, optimizer_lm, train_dataloader, val_dataloader)
 
     last_validation_wer=0.0
 
@@ -367,8 +384,9 @@ def get_collate_fn(tokenizer, validation=False):
         collated_audio_embeds_last_hidden_state = torch.zeros([len(items), max_length, audio_embeds_hidden_dim])
         for i, item in enumerate(items):
             seq_len = item['audio_embeds_last_hidden_state'].shape[1]
-            audio_embeds_attention_mask[i, :seq_len] = 1
-            collated_audio_embeds_last_hidden_state[i:i+1, :seq_len, :] = item['audio_embeds_last_hidden_state']
+            # pad from begin
+            audio_embeds_attention_mask[i, -seq_len:] = 1
+            collated_audio_embeds_last_hidden_state[i:i+1, -seq_len:, :] = item['audio_embeds_last_hidden_state']
 
         result['audio_embeds_attention_mask'] = audio_embeds_attention_mask
         result['audio_embeds_last_hidden_state'] = collated_audio_embeds_last_hidden_state
