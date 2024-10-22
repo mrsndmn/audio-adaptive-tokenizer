@@ -15,6 +15,7 @@ import datasets
 from transformers.generation import GenerationConfig
 
 from torch.optim import Adam
+from torch.optim.lr_scheduler import LRScheduler
 from torch.utils.data import DataLoader
 import transformers
 from transformers import AutoModelForCausalLM, AutoTokenizer, LlamaForCausalLM, LlamaConfig, AutoConfig
@@ -27,6 +28,8 @@ from wandb import sdk as wandb_sdk
 import accelerate
 
 from aat.model import TokenizedSpeechLM
+from aat.lr_scheduler import WarmupLRScheduler
+
 
 logger = logging.getLogger(__name__)
 logging.basicConfig(level=logging.DEBUG, format='%(asctime)s %(levelname)s %(message)s')
@@ -210,7 +213,7 @@ def val_loop(model: TokenizedSpeechLM, tokenizer, val_dataloader: DataLoader, ep
     return validation_metrics
 
 
-def train_loop(accelerator: accelerate.Accelerator, model: TokenizedSpeechLM, optimizer, optimizer_lm, train_dataloader: DataLoader, epoch, criterion, last_validation_wer=0.0, device=None):
+def train_loop(accelerator: accelerate.Accelerator, model: TokenizedSpeechLM, optimizer, optimizer_lm, lm_lr_scheduler: LRScheduler, train_dataloader: DataLoader, epoch, criterion, last_validation_wer=0.0, device=None):
     model.train()
     progress_bar = tqdm(range(len(train_dataloader)), desc=f'Epoch {epoch}')
 
@@ -295,11 +298,11 @@ def train_loop(accelerator: accelerate.Accelerator, model: TokenizedSpeechLM, op
 
         optimizer.step()
 
-        if train_config.lm_simple_model and epoch == 0 and batch_i < 500:
-            # пропускаем первые 500 шагов оптимизации для lm_decoder'а
-            pass
-        else:
-            optimizer_lm.step()
+        # lm optim step
+        optimizer_lm.step()
+        lm_lr_scheduler.step()
+
+        step_metrics['lm_lr'] = lm_lr_scheduler.get_last_lr()[0]
 
         progress_bar.update(1)
         progress_bar.set_description(f'Epoch={epoch} Loss={loss.item():.3f} WER={last_validation_wer:.3f}')
@@ -348,6 +351,7 @@ def train(
     trainable_lm_parameters = list(model.lm_decoder.parameters())
     optimizer = Adam(trainable_projection_parameters, lr=train_config.learning_rate)
     optimizer_lm = Adam(trainable_lm_parameters, lr=train_config.lm_learning_rate)
+    optimizer_lm_lr_scheduler = WarmupLRScheduler(optimizer_lm, warmup_steps=1000)
 
     # Иногда pad_token_id == eos_token_id,
     # но мы хотим, чтобы модель умела предсказывать eos_token_id
@@ -361,7 +365,7 @@ def train(
     last_validation_wer=0.0
 
     for epoch in range(train_config.num_epochs):
-        train_loop(accelerator, model, optimizer, optimizer_lm, train_dataloader, epoch=epoch, criterion=criterion, last_validation_wer=last_validation_wer, device=device)
+        train_loop(accelerator, model, optimizer, optimizer_lm, optimizer_lm_lr_scheduler, train_dataloader, epoch=epoch, criterion=criterion, last_validation_wer=last_validation_wer, device=device)
 
         if epoch % train_config.evaluate_every_epoch_mod == 0:
             validation_metrics = val_loop(model, tokenizer, val_dataloader, epoch=epoch, device=device, captioning_metrics=captioning_metrics)
