@@ -9,6 +9,8 @@ import torch.nn as nn
 import logging
 import evaluate
 
+import time
+
 import datasets
 from transformers.generation import GenerationConfig
 
@@ -212,13 +214,21 @@ def train_loop(accelerator: accelerate.Accelerator, model: TokenizedSpeechLM, op
     model.train()
     progress_bar = tqdm(range(len(train_dataloader)), desc=f'Epoch {epoch}')
 
+    last_time = time.time()
+
     for batch_i, batch in enumerate(train_dataloader):
         # with accelerator.accumulate(model):
+
+        prepare_inputs_time = time.time()
         model_inputs_with_audio = prepare_model_inputs_from_batch(model, batch, device=device)
+        # print("model_inputs_with_audio['attention_mask']", model_inputs_with_audio['attention_mask'].shape)
+        prepare_inputs_time = time.time() - prepare_inputs_time
 
-        # print("model_inputs_with_audio", model_inputs_with_audio['attention_mask'])
-
+        forward_time = time.time()
         model_prediction = model.forward(**model_inputs_with_audio)
+        forward_time = time.time() - forward_time
+
+        loss_time = time.time()
 
         # model_prediction
         batch_input_ids = batch['input_ids'].to(device)
@@ -245,7 +255,15 @@ def train_loop(accelerator: accelerate.Accelerator, model: TokenizedSpeechLM, op
 
         loss = criterion(model_prediction_caption_flatten, input_ids_flatten)
 
-        step_metrics = {"train_loss": loss.item(), "epoch": epoch}
+        loss_time = time.time() - loss_time
+
+        optim_step_time = time.time()
+
+        step_metrics = {
+            "train_loss": loss.item(),
+            "epoch": epoch,
+            "seq_len": model_inputs_with_audio['attention_mask'].shape[-1],
+        }
 
         model.zero_grad()
         projection_grad_norm = 0
@@ -285,6 +303,18 @@ def train_loop(accelerator: accelerate.Accelerator, model: TokenizedSpeechLM, op
 
         progress_bar.update(1)
         progress_bar.set_description(f'Epoch={epoch} Loss={loss.item():.3f} WER={last_validation_wer:.3f}')
+
+        optim_step_time = time.time() - optim_step_time
+
+        total_time = time.time() - last_time
+        last_time = time.time()
+
+        step_metrics['timing/prepare_inputs']  = prepare_inputs_time
+        step_metrics['timing/forward_time']    = forward_time
+        step_metrics['timing/loss_time']       = loss_time
+        step_metrics['timing/optim_step_time'] = optim_step_time
+        step_metrics['timing/total_time'] = total_time
+        step_metrics['timing/unknown_time'] = total_time - (prepare_inputs_time + forward_time + loss_time + optim_step_time)
 
         if train_config.log_grad_norm:
             projection_grad_norm = model.projection[0].weight.grad.norm(2)
@@ -458,11 +488,11 @@ def get_model(train_config: TrainConfig, from_pretrained=None, device=None):
     tokenizer.add_eos_token = True
 
     if from_pretrained is not None:
-        lm_decoder = get_lm_decoder(train_config, from_pretrained=from_pretrained, device=device)
+        lm_decoder = get_lm_decoder(train_config, from_pretrained=train_config.lm_pretrained_model, device=device)
 
         model = TokenizedSpeechLM.from_pretrained(None, lm_decoder, from_pretrained)
     else:
-        lm_decoder = get_lm_decoder(train_config, from_pretrained=from_pretrained, device=device)
+        lm_decoder = get_lm_decoder(train_config, from_pretrained=train_config.lm_pretrained_model, device=device)
         model = TokenizedSpeechLM(None, lm_decoder)
 
         model.reinitialize_weights()
