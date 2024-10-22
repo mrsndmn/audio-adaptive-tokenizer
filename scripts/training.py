@@ -14,7 +14,7 @@ import time
 import datasets
 from transformers.generation import GenerationConfig
 
-from torch.optim import Adam
+from torch.optim import Adam, AdamW
 from torch.optim.lr_scheduler import LRScheduler
 from torch.utils.data import DataLoader
 import transformers
@@ -40,11 +40,11 @@ class TrainConfig:
     log_level = "DEBUG"
     # Training
     num_epochs = 25
-    train_batch_size = 20
+    train_batch_size = 10
     val_batch_size = 1
     log_grad_norm = True
-    learning_rate = 1e-3
-    lm_learning_rate = 1e-4
+    learning_rate = 3e-4
+    lm_learning_rate = 3e-4
     # gradient_accumulation_steps = 2
 
     evaluate_every_epoch_mod = 5
@@ -352,11 +352,11 @@ def train(
 
     trainable_projection_parameters = list(model.projection.parameters()) + list(model.audio_tokens_embeddings.parameters())
     trainable_lm_parameters = list(model.lm_decoder.parameters())
-    optimizer = Adam(trainable_projection_parameters, lr=train_config.learning_rate)
-    optimizer_lr_scheduler = CyclicLR(optimizer, base_lr=1e-4, max_lr=2e-3, step_size_up=500)
+    optimizer = Adam(trainable_projection_parameters, lr=train_config.learning_rate, weight_decay=0.1)
+    optimizer_lr_scheduler = CyclicLR(optimizer, base_lr=3e-4, max_lr=1e-3, step_size_up=100)
 
-    optimizer_lm = Adam(trainable_lm_parameters, lr=train_config.lm_learning_rate)
-    optimizer_lm_lr_scheduler = WarmupLRScheduler(optimizer_lm, warmup_steps=1000)
+    optimizer_lm = AdamW(trainable_lm_parameters, lr=train_config.lm_learning_rate, weight_decay=0.1, betas=(0.9, 0.95), eps=1e-5)
+    optimizer_lm_lr_scheduler = WarmupLRScheduler(optimizer_lm, warmup_steps=100)
 
     # Иногда pad_token_id == eos_token_id,
     # но мы хотим, чтобы модель умела предсказывать eos_token_id
