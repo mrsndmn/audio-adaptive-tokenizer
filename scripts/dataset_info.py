@@ -1,6 +1,6 @@
 from datasets import Dataset
 
-ds = Dataset.load_from_disk("data/segments.dataset")
+ds = Dataset.load_from_disk("data/segments_tokenized_10_of_64.dataset")
 
 df = ds.to_pandas()
 

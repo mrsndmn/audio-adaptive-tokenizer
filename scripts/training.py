@@ -46,14 +46,18 @@ class TrainConfig:
 
     # Model
     lm_pretrained_model = "HuggingFaceTB/SmolLM-135M-Instruct"
+    lm_simple_model = False # only 2 layers
 
     # Data
-    few_train_samples = 20000
+    few_train_samples = None
     few_val_samples = 100
     dataloader_num_workers = 0
 
-    train_dataset_path = "./data/segments_tokenized_10_of_64.dataset"
-    validation_dataset_path = "./data/segments_tokenized_10_of_64.dataset"
+    # train_dataset_path = "./data/segments_tokenized_10_of_64.dataset"
+    # validation_dataset_path = "./data/segments_tokenized_10_of_64.dataset"
+
+    train_dataset_path = "./data/segments.dataset"
+    validation_dataset_path = "./data/segments.dataset"
 
 
 def prepare_model_inputs_from_batch(model: TokenizedSpeechLM, batch, device=None):
@@ -273,7 +277,7 @@ def train_loop(accelerator: accelerate.Accelerator, model: TokenizedSpeechLM, op
 
         optimizer.step()
 
-        if epoch == 0 and batch_i < 500:
+        if train_config.lm_simple_model and epoch == 0 and batch_i < 500:
             # пропускаем первые 500 шагов оптимизации для lm_decoder'а
             pass
         else:
@@ -430,11 +434,20 @@ def unfreeze_model(model):
         p.requires_grad = True
     return
 
+def get_lm_decoder(train_config: TrainConfig, from_pretrained=None, device=None):
+
+    if train_config.lm_simple_model:
+        lm_decoder_config = AutoConfig.from_pretrained(train_config.lm_pretrained_model)
+        lm_decoder_config.num_hidden_layers = 2
+        lm_decoder = LlamaForCausalLM(lm_decoder_config)
+    else:
+        lm_decoder = LlamaForCausalLM.from_pretrained(from_pretrained)
+
+    lm_decoder.to(device)
+
+    return lm_decoder
 
 def get_model(train_config: TrainConfig, from_pretrained=None, device=None):
-    # lm_decoder_config = AutoConfig.from_pretrained(train_config.lm_pretrained_model)
-    # lm_decoder_config.num_hidden_layers = 2
-    # lm_decoder = LlamaForCausalLM(lm_decoder_config)
 
     # lm_decoder = LlamaForCausalLM.from_pretrained("data/models/hearty-shadow-9/last")
 
@@ -445,13 +458,11 @@ def get_model(train_config: TrainConfig, from_pretrained=None, device=None):
     tokenizer.add_eos_token = True
 
     if from_pretrained is not None:
-        lm_decoder = LlamaForCausalLM.from_pretrained(from_pretrained)
-        lm_decoder.to(device)
+        lm_decoder = get_lm_decoder(train_config, from_pretrained=from_pretrained, device=device)
 
         model = TokenizedSpeechLM.from_pretrained(None, lm_decoder, from_pretrained)
     else:
-        lm_decoder = LlamaForCausalLM.from_pretrained(train_config.lm_pretrained_model)
-        lm_decoder.to(device)
+        lm_decoder = get_lm_decoder(train_config, from_pretrained=from_pretrained, device=device)
         model = TokenizedSpeechLM(None, lm_decoder)
 
         model.reinitialize_weights()
