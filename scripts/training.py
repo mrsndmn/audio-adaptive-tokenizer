@@ -183,11 +183,11 @@ def val_loop(model: TokenizedSpeechLM, tokenizer, val_dataloader: DataLoader, ep
             audio_embeds_attention_mask=audio_embeds_attention_mask,
         )
 
-        genconfig.max_length = caption_legth + 10
+        genconfig.max_length = caption_legth
 
         all_generation_params = {
             'generation_config': genconfig,
-            'max_new_tokens': caption_legth + 10,
+            'max_new_tokens': caption_legth,
             **model_inputs_with_only_audio,
             **gen_params,
         }

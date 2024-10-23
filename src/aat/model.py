@@ -40,8 +40,8 @@ class TokenizedSpeechLM(nn.Module):
         audio_embeds = F.normalize(audio_embeds, dim=-1)
         return self.projection(audio_embeds)
 
-    def forward(self, input_ids=None, inputs_embeds=None, attention_mask=None):
-        return self.lm_decoder.forward(input_ids=input_ids, inputs_embeds=inputs_embeds, attention_mask=attention_mask)
+    def forward(self, input_ids=None, inputs_embeds=None, attention_mask=None, output_attentions=None):
+        return self.lm_decoder.forward(input_ids=input_ids, inputs_embeds=inputs_embeds, attention_mask=attention_mask, output_attentions=None)
 
     def encode_text(self, input_ids=None):
         return self.lm_decoder.model.embed_tokens(input_ids)

@@ -7,9 +7,10 @@ import evaluate
 if __name__ == "__main__":
 
     train_config = TrainConfig()
+    train_config.val_batch_size = 1
     device = 'cuda' if torch.cuda.is_available() else 'cpu'
 
-    model, tokenizer = get_model(train_config, from_pretrained="data/models/royal-haze-19/last/", device=device)
+    model, tokenizer = get_model(train_config, from_pretrained="data/models/rare-shadow-83/last", device=device)
 
     train_dataloader, val_dataloader = get_dataloaders(train_config, tokenizer)
 
