@@ -6,6 +6,8 @@ import random
 import torch
 import torch.nn as nn
 
+import numpy as np
+
 import logging
 import evaluate
 
@@ -40,7 +42,7 @@ class TrainConfig:
     log_level = "DEBUG"
     # Training
     num_epochs = 25
-    train_batch_size = 20
+    train_batch_size = 60
     val_batch_size = 1
     log_grad_norm = True
     learning_rate = 3e-4
@@ -49,6 +51,8 @@ class TrainConfig:
 
     evaluate_every_epoch_mod = 5
     save_model_every_epoch_mod = 5
+
+    sampling_rate = 16000
 
     # Model
     lm_pretrained_model = "HuggingFaceTB/SmolLM-135M-Instruct"
@@ -59,8 +63,8 @@ class TrainConfig:
     few_val_samples = 100
     dataloader_num_workers = 0
 
-    train_dataset_path = "./data/segments_tokenized_10_of_64.dataset"
-    validation_dataset_path = "./data/segments_tokenized_10_of_64.dataset"
+    train_dataset_path = "./data/segments_tokenized_10_of_64_with_words_borders.dataset/"
+    validation_dataset_path = "./data/segments_tokenized_10_of_64_with_words_borders.dataset/"
 
     # train_dataset_path = "./data/segments.dataset"
     # validation_dataset_path = "./data/segments.dataset"
@@ -391,8 +395,8 @@ def data_preloader():
 
     def _data_preloader(items):
         result = {
+            **items,
             "audio_embeds_last_hidden_state": [],
-            "text": items['text'],
         }
 
         for audio_embeds_path in items["segments_embeddings_path"]:
@@ -404,8 +408,7 @@ def data_preloader():
 
     return _data_preloader
 
-COLLATE_TRUNCATE_INPUT_IDS = 1000
-COLLATE_TRUNCATE_AUDIO_TOKENS = 1000
+N_WORDS = 5
 
 def get_collate_fn(tokenizer, validation=False):
     def collate_fn(items):
@@ -414,41 +417,44 @@ def get_collate_fn(tokenizer, validation=False):
         bos_token = tokenizer.decode(tokenizer.bos_token_id)
         eos_token = tokenizer.decode(tokenizer.eos_token_id)
         tokenizer_input = []
+        audio_embeddings_counts = []
         for item in items:
-            text_for_item = bos_token + item['text'] + eos_token
+            words = item['words']
+            last_word_second = -1
+            if len(words) > N_WORDS:
+                words = words[:N_WORDS]
+                last_word_second = item['word_end'][N_WORDS-1]
+
+            item_text = "".join(words)
+            text_for_item = bos_token + item_text + eos_token
             tokenizer_input.append(text_for_item)
+
+            frame_boarder = int(last_word_second * train_config.sampling_rate)
+            frames_boarders = np.array(item['segments_frames']).cumsum()
+            segment_index = np.searchsorted(frames_boarders, frame_boarder) + 1
+            segment_index = min(segment_index, len(item['segments_frames']))
+            audio_embeddings_counts.append(segment_index)
+
 
         tokenized_caption = tokenizer(tokenizer_input, padding=True)
         result['input_ids'] = torch.tensor(tokenized_caption['input_ids'])
-
-        if result['input_ids'].shape[1] > COLLATE_TRUNCATE_INPUT_IDS:
-            result['input_ids'] = result['input_ids'][:, :COLLATE_TRUNCATE_INPUT_IDS]
-
-        # print("collate result['input_ids']", tokenizer.batch_decode(result['input_ids']))
-
         result['attention_mask'] = torch.tensor(tokenized_caption['attention_mask'])
-        if result['attention_mask'].shape[1] > COLLATE_TRUNCATE_INPUT_IDS:
-            result['attention_mask'] = result['attention_mask'][:, :COLLATE_TRUNCATE_INPUT_IDS]
 
         result['input_ids_attention_mask'] = result['attention_mask']
 
-        max_length = max(x['audio_embeds_last_hidden_state'].shape[1] for x in items)
         audio_embeds_hidden_dim = items[0]['audio_embeds_last_hidden_state'].shape[-1]
+        max_audio_embeddings_count = max(audio_embeddings_counts)
 
-        audio_embeds_attention_mask = torch.zeros([len(items), max_length])
-        collated_audio_embeds_last_hidden_state = torch.zeros([len(items), max_length, audio_embeds_hidden_dim])
+        audio_embeds_attention_mask = torch.zeros([len(items), max_audio_embeddings_count])
+        collated_audio_embeds_last_hidden_state = torch.zeros([len(items), max_audio_embeddings_count, audio_embeds_hidden_dim])
         for i, item in enumerate(items):
-            seq_len = item['audio_embeds_last_hidden_state'].shape[1]
+            seq_len = audio_embeddings_counts[i]
             # pad from begin
             audio_embeds_attention_mask[i, -seq_len:] = 1
-            collated_audio_embeds_last_hidden_state[i:i+1, -seq_len:, :] = item['audio_embeds_last_hidden_state']
+            collated_audio_embeds_last_hidden_state[i:i+1, -seq_len:, :] = item['audio_embeds_last_hidden_state'][:, :seq_len, :]
 
         result['audio_embeds_attention_mask'] = audio_embeds_attention_mask
-        if result['audio_embeds_attention_mask'].shape[1] > COLLATE_TRUNCATE_AUDIO_TOKENS:
-            result['audio_embeds_attention_mask'] = result['audio_embeds_attention_mask'][:, :COLLATE_TRUNCATE_AUDIO_TOKENS]
         result['audio_embeds_last_hidden_state'] = collated_audio_embeds_last_hidden_state
-        if result['audio_embeds_last_hidden_state'].shape[1] > COLLATE_TRUNCATE_AUDIO_TOKENS:
-            result['audio_embeds_last_hidden_state'] = result['audio_embeds_last_hidden_state'][:, :COLLATE_TRUNCATE_AUDIO_TOKENS, :]
 
         return result
 
