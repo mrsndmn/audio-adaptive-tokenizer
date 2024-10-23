@@ -124,6 +124,7 @@ class TokenizedSpeechLM(nn.Module):
 
     @classmethod
     def from_pretrained(cls, audio_encoder, lm_model, model_id: str):
+        print("load TokenizedSpeechLM from", model_id)
 
         model = cls(audio_encoder, lm_model)
 

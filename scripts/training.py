@@ -40,7 +40,7 @@ class TrainConfig:
     log_level = "DEBUG"
     # Training
     num_epochs = 25
-    train_batch_size = 10
+    train_batch_size = 20
     val_batch_size = 1
     log_grad_norm = True
     learning_rate = 3e-4
@@ -59,11 +59,11 @@ class TrainConfig:
     few_val_samples = 100
     dataloader_num_workers = 0
 
-    # train_dataset_path = "./data/segments_tokenized_10_of_64.dataset"
-    # validation_dataset_path = "./data/segments_tokenized_10_of_64.dataset"
+    train_dataset_path = "./data/segments_tokenized_10_of_64.dataset"
+    validation_dataset_path = "./data/segments_tokenized_10_of_64.dataset"
 
-    train_dataset_path = "./data/segments.dataset"
-    validation_dataset_path = "./data/segments.dataset"
+    # train_dataset_path = "./data/segments.dataset"
+    # validation_dataset_path = "./data/segments.dataset"
 
 
 def prepare_model_inputs_from_batch(model: TokenizedSpeechLM, batch, device=None):
@@ -352,10 +352,10 @@ def train(
 
     trainable_projection_parameters = list(model.projection.parameters()) + list(model.audio_tokens_embeddings.parameters())
     trainable_lm_parameters = list(model.lm_decoder.parameters())
-    optimizer = Adam(trainable_projection_parameters, lr=train_config.learning_rate, weight_decay=0.1)
-    optimizer_lr_scheduler = CyclicLR(optimizer, base_lr=3e-4, max_lr=1e-3, step_size_up=100)
+    optimizer = Adam(trainable_projection_parameters, lr=train_config.learning_rate)
+    optimizer_lr_scheduler = CyclicLR(optimizer, base_lr=1e-4, max_lr=3e-4, step_size_up=300)
 
-    optimizer_lm = AdamW(trainable_lm_parameters, lr=train_config.lm_learning_rate, weight_decay=0.1, betas=(0.9, 0.95), eps=1e-5)
+    optimizer_lm = Adam(trainable_lm_parameters, lr=train_config.lm_learning_rate, betas=(0.9, 0.95))
     optimizer_lm_lr_scheduler = WarmupLRScheduler(optimizer_lm, warmup_steps=100)
 
     # Иногда pad_token_id == eos_token_id,
@@ -404,6 +404,8 @@ def data_preloader():
 
     return _data_preloader
 
+COLLATE_TRUNCATE_INPUT_IDS = 1000
+COLLATE_TRUNCATE_AUDIO_TOKENS = 1000
 
 def get_collate_fn(tokenizer, validation=False):
     def collate_fn(items):
@@ -411,13 +413,23 @@ def get_collate_fn(tokenizer, validation=False):
         # random select caption
         bos_token = tokenizer.decode(tokenizer.bos_token_id)
         eos_token = tokenizer.decode(tokenizer.eos_token_id)
-        tokenizer_input = [ bos_token + item['text'] + eos_token for item in items]
+        tokenizer_input = []
+        for item in items:
+            text_for_item = bos_token + item['text'] + eos_token
+            tokenizer_input.append(text_for_item)
+
         tokenized_caption = tokenizer(tokenizer_input, padding=True)
         result['input_ids'] = torch.tensor(tokenized_caption['input_ids'])
+
+        if result['input_ids'].shape[1] > COLLATE_TRUNCATE_INPUT_IDS:
+            result['input_ids'] = result['input_ids'][:, :COLLATE_TRUNCATE_INPUT_IDS]
 
         # print("collate result['input_ids']", tokenizer.batch_decode(result['input_ids']))
 
         result['attention_mask'] = torch.tensor(tokenized_caption['attention_mask'])
+        if result['attention_mask'].shape[1] > COLLATE_TRUNCATE_INPUT_IDS:
+            result['attention_mask'] = result['attention_mask'][:, :COLLATE_TRUNCATE_INPUT_IDS]
+
         result['input_ids_attention_mask'] = result['attention_mask']
 
         max_length = max(x['audio_embeds_last_hidden_state'].shape[1] for x in items)
@@ -432,7 +444,11 @@ def get_collate_fn(tokenizer, validation=False):
             collated_audio_embeds_last_hidden_state[i:i+1, -seq_len:, :] = item['audio_embeds_last_hidden_state']
 
         result['audio_embeds_attention_mask'] = audio_embeds_attention_mask
+        if result['audio_embeds_attention_mask'].shape[1] > COLLATE_TRUNCATE_AUDIO_TOKENS:
+            result['audio_embeds_attention_mask'] = result['audio_embeds_attention_mask'][:, :COLLATE_TRUNCATE_AUDIO_TOKENS]
         result['audio_embeds_last_hidden_state'] = collated_audio_embeds_last_hidden_state
+        if result['audio_embeds_last_hidden_state'].shape[1] > COLLATE_TRUNCATE_AUDIO_TOKENS:
+            result['audio_embeds_last_hidden_state'] = result['audio_embeds_last_hidden_state'][:, :COLLATE_TRUNCATE_AUDIO_TOKENS, :]
 
         return result
 
@@ -480,6 +496,7 @@ def get_lm_decoder(train_config: TrainConfig, from_pretrained=None, device=None)
         lm_decoder_config.num_hidden_layers = 2
         lm_decoder = LlamaForCausalLM(lm_decoder_config)
     else:
+        print("from_pretrained", from_pretrained)
         lm_decoder = LlamaForCausalLM.from_pretrained(from_pretrained)
 
     lm_decoder.to(device)
@@ -497,7 +514,7 @@ def get_model(train_config: TrainConfig, from_pretrained=None, device=None):
     tokenizer.add_eos_token = True
 
     if from_pretrained is not None:
-        lm_decoder = get_lm_decoder(train_config, from_pretrained=train_config.lm_pretrained_model, device=device)
+        lm_decoder = get_lm_decoder(train_config, from_pretrained=from_pretrained, device=device)
 
         model = TokenizedSpeechLM.from_pretrained(None, lm_decoder, from_pretrained)
     else:
@@ -552,7 +569,7 @@ if __name__ == '__main__':
 
     logger.info("load language model")
 
-    model, tokenizer = get_model(train_config, device=device)
+    model, tokenizer = get_model(train_config, device=device, from_pretrained="./data/models/frosty-dust-79/last")
 
     logger.info("model was loaded")
 
@@ -581,6 +598,7 @@ if __name__ == '__main__':
             train_dataloader=train_dataloader,
             val_dataloader=val_dataloader,
             train_config=train_config,
+            captioning_metrics=captioning_metrics,
             device=device,
             device_placement=True,
         )

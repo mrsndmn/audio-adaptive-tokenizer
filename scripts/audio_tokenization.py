@@ -90,6 +90,9 @@ if __name__ == '__main__':
             "audio_path": item['audio']['path'],
             "segments_embeddings_path": segments_embeddings_file,
             "segments_frames": segments_frames,
+            "words": item['words'],
+            "word_end": item['word_end'],
+            "word_start": item['word_start'],
             "text": item["text"],
         })
 
