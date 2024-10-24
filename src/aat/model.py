@@ -9,8 +9,10 @@ class TokenizedSpeechLM(nn.Module):
     start_audio_token_id = 0
     end_audio_token_id = 1
 
-    def __init__(self, hubert, lm_decoder):
+    def __init__(self, audio_encoder, lm_decoder):
         super().__init__()
+
+        self.audio_encoder = audio_encoder
 
         # self.hubert = hubert # todo but required only for audio embeddings
         self.projection = nn.Sequential(
@@ -37,7 +39,6 @@ class TokenizedSpeechLM(nn.Module):
 
     def prepare_audio_embeddings(self, audio_embeds):
         audio_embeds = self.projection(audio_embeds)
-        audio_embeds = F.normalize(audio_embeds, dim=-1) * 3
         return audio_embeds
 
     def forward(self, input_ids=None, inputs_embeds=None, attention_mask=None, output_attentions=None):

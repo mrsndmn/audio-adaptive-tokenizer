@@ -20,7 +20,7 @@ from torch.optim import Adam, AdamW
 from torch.optim.lr_scheduler import LRScheduler
 from torch.utils.data import DataLoader
 import transformers
-from transformers import AutoModelForCausalLM, AutoTokenizer, LlamaForCausalLM, LlamaConfig, AutoConfig
+from transformers import AutoModel, AutoProcessor, AutoModelForCausalLM, AutoTokenizer, LlamaForCausalLM, LlamaConfig, AutoConfig
 
 from tqdm.auto import tqdm
 
@@ -33,6 +33,10 @@ from aat.model import TokenizedSpeechLM
 from aat.lr_scheduler import WarmupLRScheduler
 from torch.optim.lr_scheduler import CyclicLR
 
+from aat.tokenizer import AdaptiveAudioAmplitudeTokenizer
+from aat.audio import AudioWaveform
+
+
 
 logger = logging.getLogger(__name__)
 logging.basicConfig(level=logging.DEBUG, format='%(asctime)s %(levelname)s %(message)s')
@@ -42,19 +46,22 @@ class TrainConfig:
     log_level = "DEBUG"
     # Training
     num_epochs = 100
-    train_batch_size = 50
+    train_batch_size = 10
     val_batch_size = 1
     log_grad_norm = True
-    learning_rate = 1e-3
+    learning_rate = 3e-4
     lm_learning_rate = 1e-4
     # gradient_accumulation_steps = 2
 
     evaluate_every_epoch_mod = 5
     save_model_every_epoch_mod = 5
 
+    no_validation = True
+
     sampling_rate = 16000
 
     # Model
+    audio_encoder_pretrained_model = "facebook/hubert-large-ls960-ft"
     lm_pretrained_model = "HuggingFaceTB/SmolLM-135M-Instruct"
     lm_simple_model = False # only 2 layers
     optim_lm = False
@@ -132,7 +139,10 @@ def compute_validation_metrics(generations, references, captioning_metrics=None)
 
 
 @torch.no_grad()
-def val_loop(model: TokenizedSpeechLM, tokenizer, val_dataloader: DataLoader, epoch, no_loss=False, device=None, captioning_metrics=None):
+def val_loop(train_config: TrainConfig, model: TokenizedSpeechLM, tokenizer, val_dataloader: DataLoader, epoch, no_loss=False, device=None, captioning_metrics=None):
+
+    if train_config.no_validation:
+        return {}
 
     criterion = nn.CrossEntropyLoss(ignore_index=tokenizer.pad_token_id)
 
@@ -165,6 +175,8 @@ def val_loop(model: TokenizedSpeechLM, tokenizer, val_dataloader: DataLoader, ep
         caption_legth = batch_input_ids.shape[1]
 
         if not no_loss:
+            _inplace_audio_encode_batch(train_config, model, batch)
+
             model_inputs_with_audio = prepare_model_inputs_from_batch(model, batch, device=device)
 
             model_prediction = model(**model_inputs_with_audio)
@@ -221,6 +233,27 @@ def val_loop(model: TokenizedSpeechLM, tokenizer, val_dataloader: DataLoader, ep
 
     return validation_metrics
 
+def _inplace_audio_encode_batch(train_config: TrainConfig, model: TokenizedSpeechLM, batch):
+    audio_hidden_states = model.audio_encoder(
+        input_values=batch['audio_input_values'].to(device),
+        attention_mask=batch['audio_attention_mask'].to(device),
+    ).last_hidden_state
+
+    padding_mask_for_hidden_states = model.audio_encoder._get_feature_vector_attention_mask(audio_hidden_states.shape[1], batch['audio_attention_mask'])
+    padding_mask_for_hidden_states = padding_mask_for_hidden_states.to(device)
+
+    audio_hidden_states[~padding_mask_for_hidden_states] = 0.0
+
+    batch['audio_embeds_last_hidden_state'] = audio_hidden_states
+    batch['audio_embeds_attention_mask'] = padding_mask_for_hidden_states
+
+    # TODO baseline as all hubert embeddings
+    # # [ batch_size, seq_len, 1024 ]
+    # pooled_output = audio_hidden_states.sum(dim=1) / padding_mask_for_hidden_states.sum(dim=1, keepdim=True)
+
+    # # [ batch_size, seq_len, 1024 ]
+    # pooled_output = pooled_output.unsqueeze(1)
+
 
 def train_loop(accelerator: accelerate.Accelerator, model: TokenizedSpeechLM, optimizer, optimizer_lr_scheduler, optimizer_lm, lm_lr_scheduler: LRScheduler, train_dataloader: DataLoader, epoch, criterion, last_validation_wer=0.0, device=None):
     model.train()
@@ -230,6 +263,8 @@ def train_loop(accelerator: accelerate.Accelerator, model: TokenizedSpeechLM, op
 
     for batch_i, batch in enumerate(train_dataloader):
         # with accelerator.accumulate(model):
+
+        _inplace_audio_encode_batch(train_config, model, batch)
 
         prepare_inputs_time = time.time()
         model_inputs_with_audio = prepare_model_inputs_from_batch(model, batch, device=device)
@@ -386,10 +421,10 @@ def train(
         captioning_metrics=None,
         ):
 
-    trainable_projection_parameters = list(model.projection.parameters()) + list(model.audio_tokens_embeddings.parameters())
+    trainable_projection_parameters = list(model.projection.parameters()) + list(model.audio_tokens_embeddings.parameters()) + list(p for p in model.audio_encoder.parameters() if p.requires_grad)
     trainable_lm_parameters = list(model.lm_decoder.parameters())
     optimizer = Adam(trainable_projection_parameters, lr=train_config.learning_rate)
-    optimizer_lr_scheduler = CyclicLR(optimizer, base_lr=3e-4, max_lr=1e-3, step_size_up=500)
+    optimizer_lr_scheduler = CyclicLR(optimizer, base_lr=1e-4, max_lr=3e-4, step_size_up=500)
 
     if train_config.optim_lm:
         optimizer_lm = Adam(trainable_lm_parameters, lr=train_config.lm_learning_rate)
@@ -413,9 +448,9 @@ def train(
         train_loop(accelerator, model, optimizer, optimizer_lr_scheduler, optimizer_lm, optimizer_lm_lr_scheduler, train_dataloader, epoch=epoch, criterion=criterion, last_validation_wer=last_validation_wer, device=device)
 
         if epoch % train_config.evaluate_every_epoch_mod == 0:
-            validation_metrics = val_loop(model, tokenizer, val_dataloader, epoch=epoch, device=device, captioning_metrics=captioning_metrics)
+            validation_metrics = val_loop(train_config, model, tokenizer, val_dataloader, epoch=epoch, device=device, captioning_metrics=captioning_metrics)
             logger.info(f"validation metrics {validation_metrics}")
-            last_validation_wer = validation_metrics['validation/wer']
+            last_validation_wer = validation_metrics.get('validation/wer', 0.0)
 
             metric_logger.log(validation_metrics)
 
@@ -432,21 +467,24 @@ def data_preloader():
     def _data_preloader(items):
         result = {
             **items,
-            "audio_embeds_last_hidden_state": [],
+            # "audio_embeds_last_hidden_state": [],
         }
 
-        for audio_embeds_path in items["segments_embeddings_path"]:
-            audio_embeds_path = audio_embeds_path.replace('/audio_segments_embeddings/', '/audio_segments_embeddings_mean/')
-            audio_embeds = torch.load(audio_embeds_path, weights_only=True) # [ 1, tokens_count (seq_len), 768 ]
-            result["audio_embeds_last_hidden_state"].append(audio_embeds)
+        # for audio_embeds_path in items["segments_embeddings_path"]:
+        #     audio_embeds_path = audio_embeds_path.replace('/audio_segments_embeddings/', '/audio_segments_embeddings_mean/')
+        #     audio_embeds = torch.load(audio_embeds_path, weights_only=True) # [ 1, tokens_count (seq_len), 768 ]
+        #     result["audio_embeds_last_hidden_state"].append(audio_embeds)
 
         return result
 
     return _data_preloader
 
-N_WORDS = 5
+N_WORDS = 2
 
-def get_collate_fn(tokenizer, validation=False):
+def get_collate_fn(tokenizer, audio_processor, validation=False):
+
+    audio_tokenizer = AdaptiveAudioAmplitudeTokenizer()
+
     def collate_fn(items):
         result = dict()
         # random select caption
@@ -458,6 +496,8 @@ def get_collate_fn(tokenizer, validation=False):
         audio_embeddings_lengths = []
 
         good_items = []
+        audio_segments_waveforms = []
+
         for i, item in enumerate(items):
             words = item['words']
             first_word_second = 0
@@ -477,24 +517,36 @@ def get_collate_fn(tokenizer, validation=False):
 
             frame_boarder_left = int(first_word_second * train_config.sampling_rate)
             frame_boarder_right = int(last_word_second * train_config.sampling_rate)
-            frames_boarders = np.array(item['segments_frames']).cumsum()
+
+            awf_sr = AudioWaveform(item['audio']['array'], sampling_rate=item['audio']['sampling_rate'])
+            item_audio_segments = audio_tokenizer.tokenize(awf_sr)
+            segments_frames = [ ias.waveform.shape[-1] for ias in item_audio_segments ]
+            # print("segments_frames", segments_frames)
+
+            frames_boarders = np.array(segments_frames).cumsum()
 
             segment_index_left = np.searchsorted(frames_boarders, frame_boarder_left)
 
             segment_index_right = np.searchsorted(frames_boarders, frame_boarder_right) + 1
-            segment_index_right = min(segment_index_right, len(item['segments_frames']))
+            segment_index_right = min(segment_index_right, len(segments_frames)-1)
 
             assert segment_index_right > segment_index_left
 
             item_seq_len = segment_index_right - segment_index_left
             if not validation and item_seq_len > 20:
-                # print("Too long segment:", item['id'], words_start_idx, words, first_word_second, last_word_second, item_seq_len)
+                print("Too long segment:", item['id'], words_start_idx, words, first_word_second, last_word_second, item_seq_len)
                 continue
 
             tokenizer_input.append(text_for_item)
             audio_embeddings_lengths.append(item_seq_len)
             audio_embeddings_start.append(segment_index_left)
             audio_embeddings_end.append(segment_index_right)
+
+            segment_frame_start = frames_boarders[segment_index_left]
+            segment_frame_end = frames_boarders[segment_index_right]
+            assert segment_frame_start < segment_frame_end
+
+            audio_segments_waveforms.append(item['audio']['array'][segment_frame_start:segment_frame_end])
 
             good_items.append(item)
 
@@ -505,50 +557,44 @@ def get_collate_fn(tokenizer, validation=False):
 
         result['input_ids_attention_mask'] = result['attention_mask']
 
-        audio_embeds_hidden_dim = items[0]['audio_embeds_last_hidden_state'].shape[-1]
-        max_audio_embeddings_count = max(audio_embeddings_lengths)
-        expected_batch_examples = len(good_items)
+        audio_preprocessed = audio_processor(
+            audio_segments_waveforms,
+            sampling_rate=train_config.sampling_rate,
+            return_tensors="pt",
+            padding=True,
+        )
 
-        audio_embeds_attention_mask = torch.zeros([expected_batch_examples, max_audio_embeddings_count])
-        collated_audio_embeds_last_hidden_state = torch.zeros([expected_batch_examples, max_audio_embeddings_count, audio_embeds_hidden_dim])
-        for i, item in enumerate(good_items):
-            emb_start = audio_embeddings_start[i]
-            emb_end = audio_embeddings_end[i]
-            seq_len = audio_embeddings_lengths[i]
-
-            # pad from begin
-            audio_embeds_attention_mask[i, -seq_len:] = 1
-            collated_audio_embeds_last_hidden_state[i:i+1, -seq_len:, :] = item['audio_embeds_last_hidden_state'][:, emb_start:emb_end, :]
-
-        result['audio_embeds_attention_mask'] = audio_embeds_attention_mask
-        result['audio_embeds_last_hidden_state'] = collated_audio_embeds_last_hidden_state
+        result['audio_input_values'] = audio_preprocessed['input_values']
+        result['audio_attention_mask'] = audio_preprocessed['attention_mask']
+        assert result['audio_input_values'].shape[1] > 0
+        assert result['audio_attention_mask'].shape[1] > 0
 
         return result
 
     return collate_fn
 
 
-def get_train_dataloader(audio_stt_dataset, train_config: TrainConfig, tokenizer):
+def get_train_dataloader(audio_stt_dataset, train_config: TrainConfig, tokenizer, audio_processor):
 
     if train_config.few_train_samples is not None:
         audio_stt_dataset = audio_stt_dataset.select(range(train_config.few_train_samples))
 
     # print("train", list(x['text'] for x in audio_stt_dataset))
 
-    audio_stt_dataset.set_transform(data_preloader())
-    return DataLoader(audio_stt_dataset, collate_fn=get_collate_fn(tokenizer), batch_size=train_config.train_batch_size, num_workers=train_config.dataloader_num_workers, shuffle=True, drop_last=True)
+    # audio_stt_dataset.set_transform(data_preloader())
+    return DataLoader(audio_stt_dataset, collate_fn=get_collate_fn(tokenizer, audio_processor), batch_size=train_config.train_batch_size, num_workers=train_config.dataloader_num_workers, shuffle=True, drop_last=True)
 
 
-def get_val_dataloader(audio_stt_dataset, train_config: TrainConfig, tokenizer):
+def get_val_dataloader(audio_stt_dataset, train_config: TrainConfig, tokenizer, audio_processor):
 
     if train_config.few_val_samples is not None:
         audio_stt_dataset = audio_stt_dataset.select(range(train_config.few_val_samples))
 
     # print("val", list(x['text'] for x in audio_stt_dataset))
-    audio_stt_dataset.set_transform(data_preloader())
+    # audio_stt_dataset.set_transform(data_preloader())
 
     return DataLoader(audio_stt_dataset,
-                      collate_fn=get_collate_fn(tokenizer, validation=True),
+                      collate_fn=get_collate_fn(tokenizer, audio_processor, validation=True),
                       batch_size=train_config.val_batch_size)
 
 
@@ -576,23 +622,31 @@ def get_lm_decoder(train_config: TrainConfig, from_pretrained=None, device=None)
 
     return lm_decoder
 
+def get_audio_encoder(train_config: TrainConfig):
+
+    processor = AutoProcessor.from_pretrained(train_config.audio_encoder_pretrained_model)
+    model = AutoModel.from_pretrained(train_config.audio_encoder_pretrained_model)
+
+    return model, processor
+
+
 def get_model(train_config: TrainConfig, from_pretrained=None, device=None):
 
     # lm_decoder = LlamaForCausalLM.from_pretrained("data/models/hearty-shadow-9/last")
-
-    # freeze_model(lm_decoder)
 
     tokenizer = AutoTokenizer.from_pretrained(train_config.lm_pretrained_model)
     tokenizer.add_bos_token = True
     tokenizer.add_eos_token = True
 
+    audio_encoder, encoder_processor = get_audio_encoder(train_config)
+
     if from_pretrained is not None:
         lm_decoder = get_lm_decoder(train_config, from_pretrained=from_pretrained, device=device)
 
-        model = TokenizedSpeechLM.from_pretrained(None, lm_decoder, from_pretrained)
+        model = TokenizedSpeechLM.from_pretrained(audio_encoder, lm_decoder, from_pretrained)
     else:
         lm_decoder = get_lm_decoder(train_config, from_pretrained=train_config.lm_pretrained_model, device=device)
-        model = TokenizedSpeechLM(None, lm_decoder)
+        model = TokenizedSpeechLM(audio_encoder, lm_decoder)
 
         model.reinitialize_weights()
 
@@ -603,20 +657,31 @@ def get_model(train_config: TrainConfig, from_pretrained=None, device=None):
     # tokenizer.eos_token_id = 151645
 
     model.to(device)
+    freeze_model(model.lm_decoder)
+    freeze_model(model.audio_encoder)
+    unfreeze_model(model.audio_encoder.encoder.layers[-1])
 
-    return model, tokenizer
+    return model, tokenizer, encoder_processor
 
-def get_dataloaders(train_config: TrainConfig, tokenizer):
-    full_audio_stt_dataset: datasets.Dataset = datasets.load_from_disk(train_config.train_dataset_path)
-    train_test_audio_stt_dataset = full_audio_stt_dataset.train_test_split(test_size=1000, seed=1)
+
+def get_dataloaders(train_config: TrainConfig, tokenizer, audio_processor):
+    # full_audio_stt_dataset: datasets.Dataset = datasets.load_from_disk(train_config.train_dataset_path)
+    # train_test_audio_stt_dataset = full_audio_stt_dataset.train_test_split(test_size=1000, seed=1)
+
+    dataset_files = [ f'libris/train-{i:05}-of-00064.parquet' for i in range(1) ] # 1 shard = 1 gb of data
+    print("dataset_files", dataset_files)
+    audio_dataset = datasets.load_dataset("nguyenvulebinh/asr-alignment", split=datasets.Split.TRAIN, data_files=dataset_files, streaming=False)
+    # audio_dataset = load_dataset("nguyenvulebinh/asr-alignment", 'libris', split=datasets.Split.TRAIN, streaming=True)
+    audio_dataset.cast_column('audio', datasets.Audio(sampling_rate=train_config.sampling_rate))
+    train_test_audio_stt_dataset = audio_dataset.train_test_split(test_size=1000, seed=1)
 
     logger.info("load train dataloader")
     train_dataloader = get_train_dataloader(
-        train_test_audio_stt_dataset['train'], train_config, tokenizer,
+        train_test_audio_stt_dataset['train'], train_config, tokenizer, audio_processor
     )
     logger.info("load val dataloader")
     val_dataloader = get_val_dataloader(
-        train_test_audio_stt_dataset['test'], train_config, tokenizer,
+        train_test_audio_stt_dataset['test'], train_config, tokenizer, audio_processor
     )
 
     return train_dataloader, val_dataloader
@@ -648,7 +713,7 @@ if __name__ == '__main__':
 
     logger.info("load language model")
 
-    model, tokenizer = get_model(train_config, device=device)
+    model, tokenizer, audio_processor = get_model(train_config, device=device)
 
     logger.info("model was loaded")
 
@@ -657,7 +722,7 @@ if __name__ == '__main__':
     logger.info(f"trainable model parameters: {trainable_parameters_count}")
     logger.info(f"total model parameters: {total_parameters_count}")
 
-    train_dataloader, val_dataloader = get_dataloaders(train_config, tokenizer)
+    train_dataloader, val_dataloader = get_dataloaders(train_config, tokenizer, audio_processor)
 
     logger.info("run training")
 
