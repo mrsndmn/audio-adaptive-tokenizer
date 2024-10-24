@@ -41,12 +41,12 @@ logging.basicConfig(level=logging.DEBUG, format='%(asctime)s %(levelname)s %(mes
 class TrainConfig:
     log_level = "DEBUG"
     # Training
-    num_epochs = 25
-    train_batch_size = 60
+    num_epochs = 100
+    train_batch_size = 50
     val_batch_size = 1
     log_grad_norm = True
-    learning_rate = 3e-4
-    lm_learning_rate = 3e-4
+    learning_rate = 1e-3
+    lm_learning_rate = 1e-4
     # gradient_accumulation_steps = 2
 
     evaluate_every_epoch_mod = 5
@@ -57,14 +57,15 @@ class TrainConfig:
     # Model
     lm_pretrained_model = "HuggingFaceTB/SmolLM-135M-Instruct"
     lm_simple_model = False # only 2 layers
+    optim_lm = False
 
     # Data
     few_train_samples = None
-    few_val_samples = 100
+    few_val_samples = 10
     dataloader_num_workers = 0
 
-    train_dataset_path = "./data/segments_tokenized_10_of_64_with_words_borders.dataset/"
-    validation_dataset_path = "./data/segments_tokenized_10_of_64_with_words_borders.dataset/"
+    train_dataset_path = "./data/segments_tokenized_1_of_64.dataset/"
+    validation_dataset_path = "./data/segments_tokenized_1_of_64.dataset/"
 
     # train_dataset_path = "./data/segments.dataset"
     # validation_dataset_path = "./data/segments.dataset"
@@ -113,16 +114,19 @@ def compute_validation_metrics(generations, references, captioning_metrics=None)
         "validation/wer": wer_score
     }
 
-    if captioning_metrics is not None:
-        evaluate_bleu_results = captioning_metrics.compute(predictions=generations, references=references)
-        logger.info(f"evaluate_bleu_results {evaluate_bleu_results}")
+    try:
+        if captioning_metrics is not None:
+            evaluate_bleu_results = captioning_metrics.compute(predictions=generations, references=references)
+            logger.info(f"evaluate_bleu_results {evaluate_bleu_results}")
 
-        validation_metrics["validation/evaluate_bleu"] = evaluate_bleu_results['bleu'] * 100
-        validation_metrics["validation/evaluate_rouge1"] = evaluate_bleu_results['rouge1']
-        validation_metrics["validation/evaluate_rouge2"] = evaluate_bleu_results['rouge2']
-        validation_metrics["validation/evaluate_rougeL"] = evaluate_bleu_results['rougeL']
-        validation_metrics["validation/evaluate_rougeLsum"] = evaluate_bleu_results['rougeLsum']
-        validation_metrics["validation/evaluate_meteor"] = evaluate_bleu_results['meteor']
+            validation_metrics["validation/evaluate_bleu"] = evaluate_bleu_results['bleu'] * 100
+            validation_metrics["validation/evaluate_rouge1"] = evaluate_bleu_results['rouge1']
+            validation_metrics["validation/evaluate_rouge2"] = evaluate_bleu_results['rouge2']
+            validation_metrics["validation/evaluate_rougeL"] = evaluate_bleu_results['rougeL']
+            validation_metrics["validation/evaluate_rougeLsum"] = evaluate_bleu_results['rougeLsum']
+            validation_metrics["validation/evaluate_meteor"] = evaluate_bleu_results['meteor']
+    except Exception as e:
+        print("Catch eval exception", e)
 
     return validation_metrics
 
@@ -230,6 +234,7 @@ def train_loop(accelerator: accelerate.Accelerator, model: TokenizedSpeechLM, op
         prepare_inputs_time = time.time()
         model_inputs_with_audio = prepare_model_inputs_from_batch(model, batch, device=device)
         # print("model_inputs_with_audio['attention_mask']", model_inputs_with_audio['attention_mask'].shape)
+
         prepare_inputs_time = time.time() - prepare_inputs_time
 
         forward_time = time.time()
@@ -267,10 +272,35 @@ def train_loop(accelerator: accelerate.Accelerator, model: TokenizedSpeechLM, op
 
         optim_step_time = time.time()
 
+        audio_embeds_len = batch['audio_embeds_attention_mask'].shape[-1]
+        audio_embeddings = model_inputs_with_audio['inputs_embeds'][:, :audio_embeds_len, :].flatten(0, 1)[batch['audio_embeds_attention_mask'].flatten().bool()]
+        audio_embeddings_norm_mean = audio_embeddings.norm(2, dim=-1).mean().item()
+        audio_embeddings_mean = audio_embeddings.mean(dim=-1).mean().item()
+
+        text_embeddings = model_inputs_with_audio['inputs_embeds'][:, audio_embeds_len+1:, :].flatten(0, 1)[model_inputs_with_audio['attention_mask'][:, audio_embeds_len+1:].flatten().bool()]
+        text_embeddings_norm_mean = text_embeddings.norm(2, dim=-1).mean().item()
+        text_embeddings_mean = text_embeddings.mean(dim=-1).mean().item()
+        # print("text_embeddings_norm_mean", text_embeddings_norm_mean, "audio_embeddings_norm_mean", audio_embeddings_norm_mean)
+
+        audio_bos_mean = model.audio_tokens_embeddings.weight[0].mean().item()
+        audio_bos_norm = model.audio_tokens_embeddings.weight[0].norm(2).item()
+        audio_eos_mean = model.audio_tokens_embeddings.weight[1].mean().item()
+        audio_eos_norm = model.audio_tokens_embeddings.weight[1].norm(2).item()
+
         step_metrics = {
             "train_loss": loss.item(),
             "epoch": epoch,
             "seq_len": model_inputs_with_audio['attention_mask'].shape[-1],
+            "debug/audio_embeddings_norm_mean": audio_embeddings_norm_mean,
+            "debug/text_embeddings_norm_mean": text_embeddings_norm_mean,
+            "debug/audio_embeddings_mean": audio_embeddings_mean,
+            "debug/text_embeddings_mean": text_embeddings_mean,
+            "debug/text_embeddings_mean": text_embeddings_mean,
+            "debug/text_embeddings_mean": text_embeddings_mean,
+            "debug/audio_bos_mean": audio_bos_mean,
+            "debug/audio_bos_norm": audio_bos_norm,
+            "debug/audio_eos_mean": audio_eos_mean,
+            "debug/audio_eos_norm": audio_eos_norm,
         }
 
         model.zero_grad()
@@ -288,6 +318,7 @@ def train_loop(accelerator: accelerate.Accelerator, model: TokenizedSpeechLM, op
             step_metrics["zg_grad_norm/lm_head_grad_norm"] = lm_head_grad_norm
 
         loss.backward()
+        torch.nn.utils.clip_grad_norm_(model.parameters(), 1)
         # accelerator.backward(loss)
 
         if model.projection[0].weight.grad is not None:
@@ -303,13 +334,14 @@ def train_loop(accelerator: accelerate.Accelerator, model: TokenizedSpeechLM, op
 
         optimizer.step()
         optimizer_lr_scheduler.step()
+        step_metrics['projection_lr'] = optimizer_lr_scheduler.get_last_lr()[0]
 
         # lm optim step
-        optimizer_lm.step()
-        lm_lr_scheduler.step()
+        if optimizer_lm is not None:
+            optimizer_lm.step()
+            lm_lr_scheduler.step()
+            step_metrics['lm_lr'] = lm_lr_scheduler.get_last_lr()[0]
 
-        step_metrics['lm_lr'] = lm_lr_scheduler.get_last_lr()[0]
-        step_metrics['projection_lr'] = optimizer_lr_scheduler.get_last_lr()[0]
 
         progress_bar.update(1)
         progress_bar.set_description(f'Epoch={epoch} Loss={loss.item():.3f} WER={last_validation_wer:.3f}')
@@ -357,10 +389,14 @@ def train(
     trainable_projection_parameters = list(model.projection.parameters()) + list(model.audio_tokens_embeddings.parameters())
     trainable_lm_parameters = list(model.lm_decoder.parameters())
     optimizer = Adam(trainable_projection_parameters, lr=train_config.learning_rate)
-    optimizer_lr_scheduler = CyclicLR(optimizer, base_lr=1e-4, max_lr=3e-4, step_size_up=300)
+    optimizer_lr_scheduler = CyclicLR(optimizer, base_lr=3e-4, max_lr=1e-3, step_size_up=500)
 
-    optimizer_lm = Adam(trainable_lm_parameters, lr=train_config.lm_learning_rate, betas=(0.9, 0.95))
-    optimizer_lm_lr_scheduler = WarmupLRScheduler(optimizer_lm, warmup_steps=100)
+    if train_config.optim_lm:
+        optimizer_lm = Adam(trainable_lm_parameters, lr=train_config.lm_learning_rate)
+        optimizer_lm_lr_scheduler = WarmupLRScheduler(optimizer_lm, warmup_steps=1000)
+    else:
+        optimizer_lm = None # Adam(trainable_lm_parameters, lr=train_config.lm_learning_rate)
+        optimizer_lm_lr_scheduler = None # WarmupLRScheduler(optimizer_lm, warmup_steps=1000)
 
     # Иногда pad_token_id == eos_token_id,
     # но мы хотим, чтобы модель умела предсказывать eos_token_id
@@ -417,23 +453,50 @@ def get_collate_fn(tokenizer, validation=False):
         bos_token = tokenizer.decode(tokenizer.bos_token_id)
         eos_token = tokenizer.decode(tokenizer.eos_token_id)
         tokenizer_input = []
-        audio_embeddings_counts = []
-        for item in items:
+        audio_embeddings_start = []
+        audio_embeddings_end = []
+        audio_embeddings_lengths = []
+
+        good_items = []
+        for i, item in enumerate(items):
             words = item['words']
-            last_word_second = -1
-            if len(words) > N_WORDS:
-                words = words[:N_WORDS]
-                last_word_second = item['word_end'][N_WORDS-1]
+            first_word_second = 0
+            last_word_second = item['word_end'][-1]
+            if not validation:
+                if len(words) > N_WORDS:
+                    words_start_idx = random.randint(0, len(words) - N_WORDS)
+                    words = words[words_start_idx:words_start_idx+N_WORDS]
+                    first_word_second = item['word_start'][words_start_idx]
+                    last_word_second = item['word_end'][words_start_idx+N_WORDS-1]
+                else:
+                    # print("Found low words item:", item['id'], item['words'])
+                    continue
 
-            item_text = "".join(words)
+            item_text = " ".join(words)
             text_for_item = bos_token + item_text + eos_token
-            tokenizer_input.append(text_for_item)
 
-            frame_boarder = int(last_word_second * train_config.sampling_rate)
+            frame_boarder_left = int(first_word_second * train_config.sampling_rate)
+            frame_boarder_right = int(last_word_second * train_config.sampling_rate)
             frames_boarders = np.array(item['segments_frames']).cumsum()
-            segment_index = np.searchsorted(frames_boarders, frame_boarder) + 1
-            segment_index = min(segment_index, len(item['segments_frames']))
-            audio_embeddings_counts.append(segment_index)
+
+            segment_index_left = np.searchsorted(frames_boarders, frame_boarder_left)
+
+            segment_index_right = np.searchsorted(frames_boarders, frame_boarder_right) + 1
+            segment_index_right = min(segment_index_right, len(item['segments_frames']))
+
+            assert segment_index_right > segment_index_left
+
+            item_seq_len = segment_index_right - segment_index_left
+            if not validation and item_seq_len > 20:
+                # print("Too long segment:", item['id'], words_start_idx, words, first_word_second, last_word_second, item_seq_len)
+                continue
+
+            tokenizer_input.append(text_for_item)
+            audio_embeddings_lengths.append(item_seq_len)
+            audio_embeddings_start.append(segment_index_left)
+            audio_embeddings_end.append(segment_index_right)
+
+            good_items.append(item)
 
 
         tokenized_caption = tokenizer(tokenizer_input, padding=True)
@@ -443,15 +506,19 @@ def get_collate_fn(tokenizer, validation=False):
         result['input_ids_attention_mask'] = result['attention_mask']
 
         audio_embeds_hidden_dim = items[0]['audio_embeds_last_hidden_state'].shape[-1]
-        max_audio_embeddings_count = max(audio_embeddings_counts)
+        max_audio_embeddings_count = max(audio_embeddings_lengths)
+        expected_batch_examples = len(good_items)
 
-        audio_embeds_attention_mask = torch.zeros([len(items), max_audio_embeddings_count])
-        collated_audio_embeds_last_hidden_state = torch.zeros([len(items), max_audio_embeddings_count, audio_embeds_hidden_dim])
-        for i, item in enumerate(items):
-            seq_len = audio_embeddings_counts[i]
+        audio_embeds_attention_mask = torch.zeros([expected_batch_examples, max_audio_embeddings_count])
+        collated_audio_embeds_last_hidden_state = torch.zeros([expected_batch_examples, max_audio_embeddings_count, audio_embeds_hidden_dim])
+        for i, item in enumerate(good_items):
+            emb_start = audio_embeddings_start[i]
+            emb_end = audio_embeddings_end[i]
+            seq_len = audio_embeddings_lengths[i]
+
             # pad from begin
             audio_embeds_attention_mask[i, -seq_len:] = 1
-            collated_audio_embeds_last_hidden_state[i:i+1, -seq_len:, :] = item['audio_embeds_last_hidden_state'][:, :seq_len, :]
+            collated_audio_embeds_last_hidden_state[i:i+1, -seq_len:, :] = item['audio_embeds_last_hidden_state'][:, emb_start:emb_end, :]
 
         result['audio_embeds_attention_mask'] = audio_embeds_attention_mask
         result['audio_embeds_last_hidden_state'] = collated_audio_embeds_last_hidden_state
@@ -529,6 +596,12 @@ def get_model(train_config: TrainConfig, from_pretrained=None, device=None):
 
         model.reinitialize_weights()
 
+    # Qwen crutch
+    # lm_decoder.config.bos_token_id = 151644
+    # lm_decoder.config.eos_token_id = 151645
+    # tokenizer.bos_token_id = 151644
+    # tokenizer.eos_token_id = 151645
+
     model.to(device)
 
     return model, tokenizer
@@ -575,7 +648,7 @@ if __name__ == '__main__':
 
     logger.info("load language model")
 
-    model, tokenizer = get_model(train_config, device=device, from_pretrained="./data/models/frosty-dust-79/last")
+    model, tokenizer = get_model(train_config, device=device)
 
     logger.info("model was loaded")
 

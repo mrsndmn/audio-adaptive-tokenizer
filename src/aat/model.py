@@ -14,10 +14,10 @@ class TokenizedSpeechLM(nn.Module):
 
         # self.hubert = hubert # todo but required only for audio embeddings
         self.projection = nn.Sequential(
-            nn.Linear(768, 768*2),
-            nn.ReLU(),
-            nn.Linear(768*2, 576),
-            nn.LayerNorm(576),
+            # nn.Linear(768, 768*2),
+            # nn.GELU(),
+            nn.Linear(1024, lm_decoder.config.hidden_size),
+            # nn.LayerNorm(lm_decoder.config.hidden_size),
         )
 
         self.audio_tokens_embeddings = nn.Embedding(2, lm_decoder.config.hidden_size)
@@ -26,19 +26,19 @@ class TokenizedSpeechLM(nn.Module):
         return
 
     def reinitialize_weights(self, std=0.02):
-        nn.init.normal_(self.projection[0].weight, mean=0, std=std)
-        nn.init.constant_(self.projection[0].bias, 0)
-        nn.init.normal_(self.projection[2].weight, mean=0, std=std)
-        nn.init.constant_(self.projection[2].bias, 0)
+        for module in self.projection:
+            if isinstance(module, nn.Linear):
+                nn.init.normal_(module.weight, mean=0, std=std)
+                nn.init.constant_(module.bias, 0)
 
         nn.init.normal_(self.audio_tokens_embeddings.weight, mean=0, std=std)
 
         return
 
-
     def prepare_audio_embeddings(self, audio_embeds):
-        audio_embeds = F.normalize(audio_embeds, dim=-1)
-        return self.projection(audio_embeds)
+        audio_embeds = self.projection(audio_embeds)
+        audio_embeds = F.normalize(audio_embeds, dim=-1) * 3
+        return audio_embeds
 
     def forward(self, input_ids=None, inputs_embeds=None, attention_mask=None, output_attentions=None):
         return self.lm_decoder.forward(input_ids=input_ids, inputs_embeds=inputs_embeds, attention_mask=attention_mask, output_attentions=None)

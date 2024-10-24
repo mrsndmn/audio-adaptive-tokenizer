@@ -3,7 +3,7 @@ from datasets import load_dataset
 import shutil
 import os
 
-from transformers import Wav2Vec2Model, AutoProcessor
+from transformers import AutoModel, AutoProcessor, HubertModel
 
 from tqdm.auto import tqdm
 
@@ -19,8 +19,7 @@ if __name__ == '__main__':
 
     processor = AutoProcessor.from_pretrained("facebook/hubert-large-ls960-ft")
 
-    model = Wav2Vec2Model.from_pretrained("facebook/hubert-base-ls960", torch_dtype=torch.float16)
-
+    model = AutoModel.from_pretrained("facebook/hubert-large-ls960-ft")
 
     n_fft = 400
     hop_length = 160
@@ -31,7 +30,7 @@ if __name__ == '__main__':
     print("device", device)
     model.to(device)
 
-    dataset_files = [ f'libris/train-{i:05}-of-00064.parquet' for i in range(10) ] # 1 shard = 1 gb of data
+    dataset_files = [ f'libris/train-{i:05}-of-00064.parquet' for i in range(1) ] # 1 shard = 1 gb of data
     print("dataset_files", dataset_files)
     audio_dataset = load_dataset("nguyenvulebinh/asr-alignment", split=datasets.Split.TRAIN, data_files=dataset_files, streaming=True)
     # audio_dataset = load_dataset("nguyenvulebinh/asr-alignment", 'libris', split=datasets.Split.TRAIN, streaming=True)
@@ -41,61 +40,74 @@ if __name__ == '__main__':
 
     processed_segments = []
 
-    audio_segments_embeddings_base_path = "./data/audio_segments_embeddings_mean_tokenized"
+    audio_segments_embeddings_base_path = "./data/audio_segments_embeddings_mean_tokenized_1"
     if os.path.exists(audio_segments_embeddings_base_path):
         shutil.rmtree(audio_segments_embeddings_base_path)
     os.makedirs(audio_segments_embeddings_base_path, exist_ok=True)
 
-    for item in tqdm(audio_dataset, total=int(288000*10/64)):
-        audio_waveform = item['audio']['array']
+    with torch.no_grad():
+        approximate_count_examples_in_one_shard = 4395
+        for item in tqdm(audio_dataset, total=int(approximate_count_examples_in_one_shard * len(dataset_files))):
+            audio_waveform = item['audio']['array']
 
-        awf_sr = AudioWaveform(audio_waveform, item['audio']['sampling_rate'])
+            awf_sr = AudioWaveform(audio_waveform, item['audio']['sampling_rate'])
 
-        item_audio_segments = audio_tokenizer.tokenize(awf_sr)
+            item_audio_segments = audio_tokenizer.tokenize(awf_sr)
 
-        segments_embeddings = []
-        segments_frames = []
+            segments_embeddings = []
+            segments_frames = []
 
-        segments_step = 100
-        for i in range(0, len(item_audio_segments), segments_step):
+            segments_step = 100
+            for i in range(0, len(item_audio_segments), segments_step):
 
-            batch_waveforms = [ item_audio_segments[i+j].waveform for j in range(min(segments_step, len(item_audio_segments) - i)) ]
+                batch_waveforms = [ item_audio_segments[i+j].waveform for j in range(min(segments_step, len(item_audio_segments) - i)) ]
 
-            segments_frames.extend([ seg.shape[-1] for seg in batch_waveforms ])
+                segments_frames.extend([ seg.shape[-1] for seg in batch_waveforms ])
 
-            batch_input_values = processor(
-                batch_waveforms,
-                sampling_rate=expected_sampling_rate,
-                return_tensors="pt",
-                padding=True,
-            ).input_values
+                input_params = processor(
+                    batch_waveforms,
+                    sampling_rate=expected_sampling_rate,
+                    return_tensors="pt",
+                    padding=True,
+                )
 
-            hidden_states = model(batch_input_values.to(torch.float16).to(device)).last_hidden_state
+                hidden_states = model(
+                    input_values=input_params['input_values'].to(device),
+                    attention_mask=input_params['attention_mask'].to(device),
+                ).last_hidden_state
 
-            # todo remove padding before mean
-            # [ bs, 1, 768 ]
-            hidden_states = hidden_states.mean(dim=1, keepdim=True)
-            # [ 1, bs, 768 ]
-            hidden_states = hidden_states.permute(1, 0, 2)
+                padding_mask_for_hidden_states = model._get_feature_vector_attention_mask(hidden_states.shape[1], input_params['attention_mask'])
+                padding_mask_for_hidden_states = padding_mask_for_hidden_states.to(device)
 
-            segments_embeddings.append(hidden_states)
+                hidden_states[~padding_mask_for_hidden_states] = 0.0
 
-        segments_embeddings_file = os.path.join(audio_segments_embeddings_base_path, item['id'] + ".pt")
+                # [ seq_len, 1024 ]
+                pooled_output = hidden_states.sum(dim=1) / padding_mask_for_hidden_states.sum(dim=1, keepdim=True)
 
-        averaged_hubert_embeddings_t = torch.cat(segments_embeddings, dim=1) # [ 1, seq_length, 768 ]
-        torch.save(averaged_hubert_embeddings_t, segments_embeddings_file)
+                # [ 1, seq_len, 1024 ]
+                pooled_output = pooled_output.unsqueeze(0)
+                # print("pooled_output", pooled_output.shape)
+                # print("mean tokens", pooled_output.mean(dim=-1).mean())
+                # print("mean norm", pooled_output.norm(2, dim=-1).mean())
 
-        processed_segments.append({
-            "id": item["id"],
-            "audio_path": item['audio']['path'],
-            "segments_embeddings_path": segments_embeddings_file,
-            "segments_frames": segments_frames,
-            "words": item['words'],
-            "word_end": item['word_end'],
-            "word_start": item['word_start'],
-            "text": item["text"],
-        })
+                segments_embeddings.append(pooled_output)
 
-    segmented_dataset = Dataset.from_list(processed_segments)
-    segmented_dataset = segmented_dataset.cast_column("audio", Audio(sampling_rate=expected_sampling_rate))
-    segmented_dataset.save_to_disk('data/segments_tokenized_10_of_64.dataset')
+            segments_embeddings_file = os.path.join(audio_segments_embeddings_base_path, item['id'] + ".pt")
+
+            averaged_hubert_embeddings_t = torch.cat(segments_embeddings, dim=1) # [ 1, seq_length, 768 ]
+            torch.save(averaged_hubert_embeddings_t, segments_embeddings_file)
+
+            processed_segments.append({
+                "id": item["id"],
+                "audio_path": item['audio']['path'],
+                "segments_embeddings_path": segments_embeddings_file,
+                "segments_frames": segments_frames,
+                "words": item['words'],
+                "word_end": item['word_end'],
+                "word_start": item['word_start'],
+                "text": item["text"],
+            })
+
+        segmented_dataset = Dataset.from_list(processed_segments)
+        segmented_dataset = segmented_dataset.cast_column("audio", Audio(sampling_rate=expected_sampling_rate))
+        segmented_dataset.save_to_disk('data/segments_tokenized_1_of_64.dataset')
