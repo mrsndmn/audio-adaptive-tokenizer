@@ -3,6 +3,8 @@ import torch
 import torch.nn as nn
 import torch.nn.functional as F
 
+from speechtokenizer import SpeechTokenizer
+
 
 class TokenizedSpeechLM(nn.Module):
 
@@ -13,14 +15,20 @@ class TokenizedSpeechLM(nn.Module):
         super().__init__()
 
         self.audio_encoder = audio_encoder
+        if isinstance(audio_encoder, SpeechTokenizer):
+            self.speech_tokenizer_embeddings = nn.Embedding(audio_encoder.quantizer.bins, lm_decoder.config.hidden_size)
 
-        # self.hubert = hubert # todo but required only for audio embeddings
-        self.projection = nn.Sequential(
-            # nn.Linear(768, 768*2),
-            # nn.GELU(),
-            nn.Linear(1024, lm_decoder.config.hidden_size),
-            # nn.LayerNorm(lm_decoder.config.hidden_size),
-        )
+            self.projection = nn.Sequential(
+                nn.Identity()
+            )
+        else:
+            # self.hubert = hubert # todo but required only for audio embeddings
+            self.projection = nn.Sequential(
+                # nn.Linear(768, 768*2),
+                # nn.GELU(),
+                nn.Linear(1024, lm_decoder.config.hidden_size),
+                # nn.LayerNorm(lm_decoder.config.hidden_size),
+            )
 
         self.audio_tokens_embeddings = nn.Embedding(2, lm_decoder.config.hidden_size)
         self.lm_decoder = lm_decoder
@@ -34,6 +42,9 @@ class TokenizedSpeechLM(nn.Module):
                 nn.init.constant_(module.bias, 0)
 
         nn.init.normal_(self.audio_tokens_embeddings.weight, mean=0, std=std)
+
+        if hasattr(self, 'speech_tokenizer_embeddings'):
+            nn.init.normal_(self.speech_tokenizer_embeddings.weight, mean=0, std=std)
 
         return
 
