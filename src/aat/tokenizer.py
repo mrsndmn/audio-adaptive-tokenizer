@@ -15,7 +15,7 @@ class AdaptiveAudioAmplitudeTokenizer():
     def __init__(self,
                 lowess_frac=0.008,
                 min_segment_duration_milliseconds=25,
-                max_segment_duration_milliseconds=500,
+                max_segment_duration_milliseconds=250,
                 n_fft=400,
                 hop_length=160,
                 num_mel_filters=80,
@@ -147,7 +147,7 @@ class AdaptiveAudioAmplitudeTokenizer():
             segment_length_frames = waveform_minima - prev_minima
 
             if segment_length_frames < self.min_segment_frames:
-                # filter out too small segments
+                # ignore out too small segments
                 continue
 
             if segment_length_frames > self.max_segment_frames:
@@ -183,7 +183,7 @@ class AdaptiveAudioAmplitudeTokenizer():
 
         waveform_segments = self.process_segments_boarders(audio_waveform, segments_boarders)
 
-        assert len(waveform_segments) < 200
+        assert len(waveform_segments) < 300
         sum_frames = sum(x.shape[-1] for x in waveform_segments)
         assert sum_frames >= audio_waveform.shape[-1]
 

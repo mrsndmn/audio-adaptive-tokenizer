@@ -5,7 +5,26 @@ import torch.nn.functional as F
 
 from speechtokenizer import SpeechTokenizer
 
+from transformers import BertModel
 
+class AudioEmbeddingsPooling(nn.Module):
+    def __init__(self, bert_model):
+        super().__init__()
+
+        self.l_in = nn.Linear(576, bert_model.embeddings.word_embeddings.embedding_dim)
+        self.bert = bert_model
+        self.l_out = nn.Linear(bert_model.embeddings.word_embeddings.embedding_dim, 576)
+
+    def forward(self, inputs_embeds, encoder_attention_mask):
+
+        projected_inputs = self.l_in(inputs_embeds)
+        bert_outputs = self.bert(
+            inputs_embeds=projected_inputs,
+            encoder_attention_mask=encoder_attention_mask,
+        )
+        pooler_output = self.l_out(bert_outputs.pooler_output)
+
+        return pooler_output
 class TokenizedSpeechLM(nn.Module):
 
     start_audio_token_id = 0
@@ -16,11 +35,15 @@ class TokenizedSpeechLM(nn.Module):
 
         self.audio_encoder = audio_encoder
         if isinstance(audio_encoder, SpeechTokenizer):
-            self.speech_tokenizer_embeddings = nn.Embedding(audio_encoder.quantizer.bins, lm_decoder.config.hidden_size)
+            self.embeddings_count = audio_encoder.quantizer.bins + 1
+            self.speech_tokenizer_embeddings = nn.Embedding(self.embeddings_count, lm_decoder.config.hidden_size)
 
             self.projection = nn.Sequential(
                 nn.Identity()
             )
+
+            bert_model = BertModel.from_pretrained("prajjwal1/bert-medium")
+            self.audio_embeddings_pooling = AudioEmbeddingsPooling(bert_model)
         else:
             # self.hubert = hubert # todo but required only for audio embeddings
             self.projection = nn.Sequential(
@@ -45,6 +68,10 @@ class TokenizedSpeechLM(nn.Module):
 
         if hasattr(self, 'speech_tokenizer_embeddings'):
             nn.init.normal_(self.speech_tokenizer_embeddings.weight, mean=0, std=std)
+
+        if hasattr(self, 'audio_embeddings_pooling'):
+            nn.init.normal_(self.audio_embeddings_pooling.l_in.weight, mean=0, std=std)
+            nn.init.normal_(self.audio_embeddings_pooling.l_out.weight, mean=0, std=std)
 
         return
 
