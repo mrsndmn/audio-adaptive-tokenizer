@@ -6,6 +6,7 @@ from transformers.audio_utils import spectrogram, mel_filter_bank, window_functi
 from scipy.signal import argrelextrema
 import statsmodels.api as sm
 import numpy as np
+import torch
 
 from aat.audio import AudioWaveform
 
@@ -65,8 +66,15 @@ class AdaptiveAudioAmplitudeTokenizer():
 
 
         # Smooth amplitude over time
-        melspec_mean_amplitude = sm.nonparametric.lowess(melspec_mean_amplitude, np.arange(len(melspec_mean_amplitude)), frac=0.008)
-        melspec_mean_amplitude = melspec_mean_amplitude[:, 1] # shape (seq_len)
+        def running_mean(x, N):
+            cumsum = np.cumsum(x)
+            return (cumsum[N:] - cumsum[:-N]) / float(N)
+
+        melspec_mean_amplitude = running_mean(melspec_mean_amplitude, 12)
+
+        # lowess is too slow
+        # melspec_mean_amplitude = sm.nonparametric.lowess(melspec_mean_amplitude, np.arange(len(melspec_mean_amplitude)), frac=0.008)
+        # melspec_mean_amplitude = melspec_mean_amplitude[:, 1] # shape (seq_len)
 
         # fp32 presision crutch
         def greater_eps(x1, x2):

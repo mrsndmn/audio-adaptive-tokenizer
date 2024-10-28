@@ -129,6 +129,9 @@ class TokenizedSpeechLM(nn.Module):
         torch.save(self.projection.state_dict(), os.path.join(save_directory, "projection.pt"))
         torch.save(self.audio_tokens_embeddings.state_dict(), os.path.join(save_directory, "audio_tokens_embeddings.pt"))
 
+        if hasattr(self, 'speech_tokenizer_embeddings'):
+            torch.save(self.speech_tokenizer_embeddings.state_dict(), os.path.join(save_directory, "speech_tokenizer_embeddings.pt"))
+
         self.lm_decoder.save_pretrained(save_directory)
         # self.config.save_pretrained(save_directory)
 
@@ -148,5 +151,10 @@ class TokenizedSpeechLM(nn.Module):
         audio_tokens_embeddings_path = os.path.join(model_id, "audio_tokens_embeddings.pt")
         audio_tokens_embeddings_state = torch.load(audio_tokens_embeddings_path, map_location=torch.device('cpu'))
         model.audio_tokens_embeddings.load_state_dict(audio_tokens_embeddings_state)
+
+        if hasattr(model, 'speech_tokenizer_embeddings'):
+            speech_tokenizer_embeddings_state_dict_path = os.path.join(model_id, "speech_tokenizer_embeddings.pt")
+            speech_tokenizer_embeddings_state_dict = torch.load(speech_tokenizer_embeddings_state_dict_path, map_location=torch.device('cpu'))
+            model.speech_tokenizer_embeddings.load_state_dict(speech_tokenizer_embeddings_state_dict)
 
         return model

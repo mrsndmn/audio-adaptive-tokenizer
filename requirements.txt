@@ -13,3 +13,7 @@ statsmodels
 # transformers==4.45.2
 wandb
 jiwer
+nltk
+speechtokenizer
+beartype
+rouge_score

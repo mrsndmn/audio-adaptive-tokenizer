@@ -10,9 +10,9 @@ if __name__ == "__main__":
     train_config.val_batch_size = 1
     device = 'cuda' if torch.cuda.is_available() else 'cpu'
 
-    model, tokenizer = get_model(train_config, from_pretrained="data/models/rare-shadow-83/last", device=device)
+    model, tokenizer, audio_processor = get_model(train_config, from_pretrained="data/models/bumbling-vortex-3/last/", device=device)
 
-    train_dataloader, val_dataloader = get_dataloaders(train_config, tokenizer)
+    train_dataloader, val_dataloader = get_dataloaders(train_config, tokenizer, audio_processor)
 
     captioning_metrics = evaluate.combine(
         [
@@ -22,6 +22,6 @@ if __name__ == "__main__":
         ]
     )
 
-    validation_metrics = val_loop(model, tokenizer, val_dataloader, epoch=0, device=device, captioning_metrics=captioning_metrics)
+    validation_metrics = val_loop(train_config, model, tokenizer, val_dataloader, epoch=0, device=device, captioning_metrics=captioning_metrics)
 
     print(validation_metrics)
