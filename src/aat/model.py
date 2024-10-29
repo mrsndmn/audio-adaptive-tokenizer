@@ -15,6 +15,8 @@ class AudioEmbeddingsPooling(nn.Module):
         self.bert = bert_model
         self.l_out = nn.Linear(bert_model.embeddings.word_embeddings.embedding_dim, 576)
 
+        self.scale = nn.Parameter(torch.tensor([1.0]))
+
     def forward(self, inputs_embeds, encoder_attention_mask):
 
         projected_inputs = self.l_in(inputs_embeds)
@@ -23,6 +25,7 @@ class AudioEmbeddingsPooling(nn.Module):
             encoder_attention_mask=encoder_attention_mask,
         )
         pooler_output = self.l_out(bert_outputs.pooler_output)
+        pooler_output = F.normalize(pooler_output, dim=-1) * self.scale
 
         return pooler_output
 class TokenizedSpeechLM(nn.Module):
@@ -42,7 +45,7 @@ class TokenizedSpeechLM(nn.Module):
                 nn.Identity()
             )
 
-            bert_model = BertModel.from_pretrained("prajjwal1/bert-medium")
+            bert_model = BertModel.from_pretrained("prajjwal1/bert-medium", num_hidden_layers=2)
             self.audio_embeddings_pooling = AudioEmbeddingsPooling(bert_model)
         else:
             # self.hubert = hubert # todo but required only for audio embeddings

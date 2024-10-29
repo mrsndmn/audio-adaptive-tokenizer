@@ -1,4 +1,4 @@
-from typing import Callable
+from typing import Callable, List, Dict
 
 import numpy as np
 import torch
@@ -10,18 +10,33 @@ import random
 
 class TokenizedAudioWaveformCollator():
 
-    N_WORDS = 1000
-
-    def __init__(self, audio_tokenizer: AdaptiveAudioAmplitudeTokenizer, build_text_tokenizer: Callable, audio_processor: Callable, sampling_rate: int, validation: bool):
+    def __init__(self, audio_tokenizer: AdaptiveAudioAmplitudeTokenizer, build_text_tokenizer: Callable, sampling_rate: int, validation: bool):
 
         self.sampling_rate = sampling_rate
 
         self.audio_tokenizer = audio_tokenizer
-        self.audio_processor = audio_processor
         self.build_text_tokenizer = build_text_tokenizer
         self.validation = validation
 
         return
+
+    def pad_waveforms(self, waveforms_padding_list: List) -> Dict:
+        assert len(waveforms_padding_list[0].shape) == 1, 'channel dim is not supported for waveform'
+        max_len = max(x.shape[-1] for x in waveforms_padding_list)
+        batch_size = len(waveforms_padding_list)
+
+        attention_mask = torch.zeros(batch_size, max_len, dtype=torch.long)
+        batched_waveform = torch.zeros(batch_size, max_len)
+
+        for i, wf in enumerate(waveforms_padding_list):
+            attention_mask[i, :wf.shape[-1]] = 1
+            batched_waveform[i, :wf.shape[-1]] = torch.from_numpy(wf)
+
+        return {
+            "input_values": batched_waveform,
+            "attention_mask": attention_mask,
+        }
+
 
     def __call__(self, items):
 
@@ -39,20 +54,12 @@ class TokenizedAudioWaveformCollator():
         good_items = []
         segments_boarders = []
         audio_segments_waveforms = []
+        segment_frames_len = []
 
         for i, item in enumerate(items):
             words = item['words']
             first_word_second = 0
             last_word_second = item['word_end'][-1]
-            if not self.validation:
-                if len(words) > self.N_WORDS:
-                    words_start_idx = random.randint(0, len(words) - self.N_WORDS)
-                    words = words[words_start_idx:words_start_idx+self.N_WORDS]
-                    first_word_second = item['word_start'][words_start_idx]
-                    last_word_second = item['word_end'][words_start_idx+self.N_WORDS-1]
-                # else:
-                #     # print("Found low words item:", item['id'], item['words'])
-                #     continue
 
             item_text = " ".join(words)
             text_for_item = bos_token + item_text + eos_token
@@ -65,7 +72,8 @@ class TokenizedAudioWaveformCollator():
             segments_frames = [ ias.waveform.shape[-1] for ias in item_audio_segments ]
             # print("segments_frames", segments_frames)
 
-            frames_boarders = np.array(segments_frames).cumsum()
+            frames_boarders_raw = np.array(segments_frames)
+            frames_boarders = frames_boarders_raw.cumsum()
 
             segment_index_left = np.searchsorted(frames_boarders, frame_boarder_left)
 
@@ -93,6 +101,7 @@ class TokenizedAudioWaveformCollator():
             good_items.append(item)
             segment_boarders = frames_boarders[segment_index_left:(segment_index_right+1)] - frames_boarders[segment_index_left]
             segments_boarders.append( segment_boarders )
+            segment_frames_len.append(frames_boarders_raw.max())
 
 
         tokenized_caption = tokenizer(tokenizer_input, padding=True)
@@ -101,7 +110,7 @@ class TokenizedAudioWaveformCollator():
 
         result['input_ids_attention_mask'] = result['attention_mask']
 
-        audio_preprocessed = self.audio_processor(
+        audio_preprocessed = self.pad_waveforms(
             audio_segments_waveforms,
         )
 
@@ -121,6 +130,7 @@ class TokenizedAudioWaveformCollator():
 
         result['segments_boarders_padded'] = segments_boarders_padded
         result['segments_boarders_attention_mask'] = segments_boarders_attention_mask
+        result['segments_frames_len'] = torch.tensor(segment_frames_len)
 
         return result
 
