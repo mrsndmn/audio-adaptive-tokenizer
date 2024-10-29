@@ -28,6 +28,8 @@ class AudioEmbeddingsPooling(nn.Module):
         pooler_output = F.normalize(pooler_output, dim=-1) * self.scale
 
         return pooler_output
+
+
 class TokenizedSpeechLM(nn.Module):
 
     start_audio_token_id = 0
@@ -47,6 +49,8 @@ class TokenizedSpeechLM(nn.Module):
 
             bert_model = BertModel.from_pretrained("bert-base-uncased")
             self.audio_embeddings_pooling = AudioEmbeddingsPooling(bert_model)
+
+            self.speech_tokenizer_projection = nn.Linear(lm_decoder.config.hidden_size * 13, lm_decoder.config.hidden_size)
         else:
             # self.hubert = hubert # todo but required only for audio embeddings
             self.projection = nn.Sequential(

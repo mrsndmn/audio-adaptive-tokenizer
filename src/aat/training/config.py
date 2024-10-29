@@ -16,6 +16,7 @@ class DeviceEnum(str, Enum):
 class SegmentProjectionEnum(str, Enum):
     bert  = "bert"
     mean = "mean"
+    linear = "linear"
 
 
 class BaseExperiment(BaseModel):
@@ -63,18 +64,18 @@ class TrainConfig(BaseExperiment):
     # Data
     few_train_samples: Optional[int] = 100
     few_val_samples: int = 1
-    dataset_shards: int = 1
     dataloader_num_workers: int = 5
-    # dataset_shards = 1
     # dataloader_num_workers = 0
 
-    train_dataset_path: str = "./data/segments_tokenized_64_of_64.dataset/"
-    validation_dataset_path: str = "./data/segments_tokenized_64_of_64.dataset/"
+    train_dataset_path: str
+    validation_dataset_path: str
 
     segment_projection: SegmentProjectionEnum
 
-    # train_dataset_path = "./data/segments.dataset"
-    # validation_dataset_path = "./data/segments.dataset"
+    @model_validator(mode='after')
+    def validate_different_datasets(self):
+        if self.train_dataset_path == self.validation_dataset_path:
+            raise ValueError("Datasets must not be the same for validation and train")
 
 
 def overfit_one_batch_train_config():
@@ -97,19 +98,18 @@ def overfit_one_batch_train_config():
         # Model
         audio_encoder_pretrained_model = "facebook/hubert-large-ls960-ft",
         lm_pretrained_model = "HuggingFaceTB/SmolLM-135M-Instruct",
-        segment_projection = SegmentProjectionEnum.mean,
+        segment_projection = SegmentProjectionEnum.linear,
 
         optim_lm = True,
         optim_audio_encoder = False,
 
         # Data
-        few_train_samples = 100,
+        few_train_samples = 300,
         few_val_samples = 1,
-        dataset_shards = 1,
         dataloader_num_workers = 0,
 
-        train_dataset_path = "./data/segments_tokenized_64_of_64.dataset/",
-        validation_dataset_path = "./data/segments_tokenized_64_of_64.dataset/",
+        train_dataset_path = "data/libris_with_segments_1_shard.dataset",
+        validation_dataset_path = "data/libris_with_segments_valid.dataset",
     )
 
 
@@ -117,13 +117,13 @@ def full_unfreeze_train_config():
 
     return TrainConfig(
         num_epochs = 100,
-        train_batch_size = 10,
+        train_batch_size = 25,
         val_batch_size = 1,
         learning_rate = 1e-4,
         # gradient_accumulation_steps = 2
 
-        evaluate_every_epoch_mod = 10,
-        save_model_every_epoch_mod = 10,
+        evaluate_every_epoch_mod = 5,
+        save_model_every_epoch_mod = 5,
 
         no_validation = False,
 
@@ -134,7 +134,7 @@ def full_unfreeze_train_config():
         audio_encoder_pretrained_model = "facebook/hubert-large-ls960-ft",
         lm_pretrained_model = "HuggingFaceTB/SmolLM-135M-Instruct",
 
-        segment_projection = SegmentProjectionEnum.mean,
+        segment_projection = SegmentProjectionEnum.linear,
 
         optim_lm = True,
         optim_audio_encoder = False,
@@ -142,10 +142,9 @@ def full_unfreeze_train_config():
         # Data
         few_train_samples = None,
         few_val_samples = 100,
-        dataset_shards = 20,
-        dataloader_num_workers = 20,
+        dataloader_num_workers = 50,
 
-        train_dataset_path = "./data/segments_tokenized_64_of_64.dataset/",
-        validation_dataset_path = "./data/segments_tokenized_64_of_64.dataset/",
+        train_dataset_path = "data/libris_with_segments_1_shard.dataset",
+        validation_dataset_path = "data/libris_with_segments_valid.dataset",
     )
 

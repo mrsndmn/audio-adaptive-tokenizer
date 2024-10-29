@@ -1,3 +1,5 @@
+import os
+
 import argparse
 
 import pathlib
@@ -91,14 +93,14 @@ def train(
             accelerator.log(validation_metrics)
 
         if epoch % train_config.save_model_every_epoch_mod == 0:
-            base_path_for_model = pathlib.Path(f"data/models/{wandb_run.name}/last/")
+            base_path_for_model = pathlib.Path(f"data/models/{wandb_run.run.name}/last/")
             save_model(train_config=train_config, model=model, path=base_path_for_model)
 
-    base_path_for_model = pathlib.Path(f"data/models/{wandb_run.name}/last/")
+    base_path_for_model = pathlib.Path(f"data/models/{wandb_run.run.name}/last/")
     save_model(train_config=train_config, model=model, path=base_path_for_model)
-
     accelerator.end_training()
 
+    return
 
 def freeze_model(model):
     for p in model.parameters():
@@ -210,14 +212,19 @@ if __name__ == '__main__':
     logger.info(f"trainable model parameters: {trainable_parameters_count}")
     logger.info(f"total model parameters: {total_parameters_count}")
 
-    train(
-        model=model,
-        tokenizer=tokenizer,
-        train_dataloader=train_dataloader,
-        val_dataloader=val_dataloader,
-        train_config=train_config,
-        captioning_metrics=captioning_metrics,
-        wer_compute=wer_compute,
-        device=device,
-        device_placement=True,
-    )
+    os.environ["TOKENIZERS_PARALLELISM"] = "true"
+
+    import cProfile
+    with cProfile.Profile() as pr:
+        train(
+            model=model,
+            tokenizer=tokenizer,
+            train_dataloader=train_dataloader,
+            val_dataloader=val_dataloader,
+            train_config=train_config,
+            captioning_metrics=captioning_metrics,
+            wer_compute=wer_compute,
+            device=device,
+            device_placement=True,
+        )
+        pr.dump_stats("train_profile.prof")

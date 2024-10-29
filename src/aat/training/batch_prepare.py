@@ -18,7 +18,7 @@ def _inplace_audio_encode_batch_speechtokenizer(train_config: TrainConfig, model
     batch_size = segments_boarders_padded.shape[0]
     segments_count = segments_boarders_padded.shape[1]
 
-    max_segment_waveform_frames = batch['segments_max_frame_len'].max()
+    max_segment_waveform_frames = train_config.max_segment_waveform_frames
     batched_segments = torch.zeros([batch_size, segments_count, max_segment_waveform_frames], device=device)
 
     waveforms_mask = torch.zeros_like(batched_segments)
@@ -84,6 +84,19 @@ def _inplace_audio_encode_batch_speechtokenizer(train_config: TrainConfig, model
 
         audio_hidden_states = sum_audio_hidden_states / (sum_codes_from_attention_mask + 1e-9)
 
+        # [ bs, segments_count, embedding_dim ]
+        audio_hidden_states = audio_hidden_states.unflatten(0, [batch_size, segments_count])
+    elif train_config.segment_projection == SegmentProjectionEnum.linear:
+        # [ bs * segments_count, seq_len, embedding_dim ]
+        audio_hidden_states = model.speech_tokenizer_embeddings(audio_codes)
+        audio_hidden_states[~codes_attention_mask] = 0
+
+        # seq_len is fixed due to each segment has fixed len
+        # [ bs * segments_count, seq_len * embedding_dim ]
+        audio_hidden_states = audio_hidden_states.flatten(1, 2)
+
+        # [ bs * segments_count, embedding_dim ]
+        audio_hidden_states = model.speech_tokenizer_projection(audio_hidden_states)
         # [ bs, segments_count, embedding_dim ]
         audio_hidden_states = audio_hidden_states.unflatten(0, [batch_size, segments_count])
     else:

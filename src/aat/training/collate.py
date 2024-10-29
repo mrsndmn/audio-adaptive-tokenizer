@@ -16,6 +16,8 @@ class TokenizedAudioWaveformCollator():
 
         self.audio_tokenizer = audio_tokenizer
         self.build_text_tokenizer = build_text_tokenizer
+        self.tokenizer = self.build_text_tokenizer()
+
         self.validation = validation
 
         return
@@ -40,7 +42,7 @@ class TokenizedAudioWaveformCollator():
 
     def __call__(self, items):
 
-        tokenizer = self.build_text_tokenizer()
+        tokenizer = self.tokenizer
 
         result = dict()
         # random select caption
@@ -63,17 +65,13 @@ class TokenizedAudioWaveformCollator():
             frame_boarder_left = int(first_word_second * self.sampling_rate)
             frame_boarder_right = int(last_word_second * self.sampling_rate)
 
-            awf_sr = AudioWaveform(item['audio']['array'], sampling_rate=item['audio']['sampling_rate'])
-            item_audio_segments = self.audio_tokenizer.tokenize(awf_sr)
-            segments_frames = [ ias.waveform.shape[-1] for ias in item_audio_segments ]
-            # print("segments_frames", segments_frames)
-
-            frames_boarders_raw = np.array(segments_frames)
+            waveform = np.array(item['audio']['array'])
+            frames_boarders_raw = np.array(item['segment_frames'])
             frames_boarders = frames_boarders_raw.cumsum()
 
             tokenizer_input.append(text_for_item)
 
-            audio_segments_waveforms.append(item['audio']['array'])
+            audio_segments_waveforms.append(waveform)
 
             segments_boarders.append( frames_boarders )
             segments_max_frame_len.append(frames_boarders_raw.max())
