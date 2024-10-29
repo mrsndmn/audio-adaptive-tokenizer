@@ -5,6 +5,8 @@ class AudioWaveform():
         self.waveform: np.ndarray = waveform
         self.sampling_rate = sampling_rate
 
+        assert len(waveform.shape) == 1, 'channel dim is not supported for waveform'
+
         self.duration_seconds: float = self.waveform.shape[-1] / self.sampling_rate
 
         return

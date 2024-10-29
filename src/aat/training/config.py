@@ -9,15 +9,19 @@ import os
 
 class DeviceEnum(str, Enum):
     auto = "auto"
-    mps = "mps"
+    mps  = "mps"
     cuda = "cuda"
-    cpu = "cpu"
+    cpu  = "cpu"
+
+class SegmentProjectionEnum(str, Enum):
+    bert  = "bert"
+    mean = "mean"
 
 
 class BaseExperiment(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
-    device: DeviceEnum = Field(default="auto")
+    device: DeviceEnum = Field(default=DeviceEnum.auto)
 
     @computed_field
     def nn_device(self) -> str:
@@ -38,9 +42,7 @@ class TrainConfig(BaseExperiment):
     num_epochs: int = 500
     train_batch_size: int = 25
     val_batch_size: int = 1
-    learning_rate: float = 5e-5
-    max_lr: float = 3e-4
-    step_size_up: int = 500,
+    learning_rate: float = 3e-4
     # gradient_accumulation_steps = 2
 
     evaluate_every_epoch_mod: int = 10
@@ -69,6 +71,8 @@ class TrainConfig(BaseExperiment):
     train_dataset_path: str = "./data/segments_tokenized_64_of_64.dataset/"
     validation_dataset_path: str = "./data/segments_tokenized_64_of_64.dataset/"
 
+    segment_projection: SegmentProjectionEnum
+
     # train_dataset_path = "./data/segments.dataset"
     # validation_dataset_path = "./data/segments.dataset"
 
@@ -76,12 +80,10 @@ class TrainConfig(BaseExperiment):
 def overfit_one_batch_train_config():
 
     return TrainConfig(
-        num_epochs = 100,
+        num_epochs = 1,
         train_batch_size = 25,
         val_batch_size = 1,
-        learning_rate = 5e-5,
-        max_lr = 3e-4,
-        step_size_up=10,
+        learning_rate = 1e-4,
         # gradient_accumulation_steps = 2
 
         evaluate_every_epoch_mod = 10,
@@ -95,6 +97,7 @@ def overfit_one_batch_train_config():
         # Model
         audio_encoder_pretrained_model = "facebook/hubert-large-ls960-ft",
         lm_pretrained_model = "HuggingFaceTB/SmolLM-135M-Instruct",
+        segment_projection = SegmentProjectionEnum.mean,
 
         optim_lm = True,
         optim_audio_encoder = False,
@@ -104,14 +107,9 @@ def overfit_one_batch_train_config():
         few_val_samples = 1,
         dataset_shards = 1,
         dataloader_num_workers = 0,
-        # dataset_shards = 1
-        # dataloader_num_workers = 0
 
         train_dataset_path = "./data/segments_tokenized_64_of_64.dataset/",
         validation_dataset_path = "./data/segments_tokenized_64_of_64.dataset/",
-
-        # train_dataset_path = "./data/segments.dataset"
-        # validation_dataset_path = "./data/segments.dataset"
     )
 
 
@@ -119,11 +117,9 @@ def full_unfreeze_train_config():
 
     return TrainConfig(
         num_epochs = 100,
-        train_batch_size = 25,
+        train_batch_size = 10,
         val_batch_size = 1,
-        learning_rate = 5e-5,
-        max_lr = 5e-4,
-        step_size_up=100,
+        learning_rate = 1e-4,
         # gradient_accumulation_steps = 2
 
         evaluate_every_epoch_mod = 10,
@@ -138,21 +134,18 @@ def full_unfreeze_train_config():
         audio_encoder_pretrained_model = "facebook/hubert-large-ls960-ft",
         lm_pretrained_model = "HuggingFaceTB/SmolLM-135M-Instruct",
 
+        segment_projection = SegmentProjectionEnum.mean,
+
         optim_lm = True,
         optim_audio_encoder = False,
 
         # Data
         few_train_samples = None,
         few_val_samples = 100,
-        dataset_shards = 10,
-        dataloader_num_workers = 5,
-        # dataset_shards = 1
-        # dataloader_num_workers = 0
+        dataset_shards = 20,
+        dataloader_num_workers = 20,
 
         train_dataset_path = "./data/segments_tokenized_64_of_64.dataset/",
         validation_dataset_path = "./data/segments_tokenized_64_of_64.dataset/",
-
-        # train_dataset_path = "./data/segments.dataset"
-        # validation_dataset_path = "./data/segments.dataset"
     )
 

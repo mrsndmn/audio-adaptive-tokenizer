@@ -45,7 +45,7 @@ class TokenizedSpeechLM(nn.Module):
                 nn.Identity()
             )
 
-            bert_model = BertModel.from_pretrained("prajjwal1/bert-medium", num_hidden_layers=2)
+            bert_model = BertModel.from_pretrained("bert-base-uncased")
             self.audio_embeddings_pooling = AudioEmbeddingsPooling(bert_model)
         else:
             # self.hubert = hubert # todo but required only for audio embeddings

@@ -10,7 +10,7 @@ import random
 
 class TokenizedAudioWaveformCollator():
 
-    def __init__(self, audio_tokenizer: AdaptiveAudioAmplitudeTokenizer, build_text_tokenizer: Callable, sampling_rate: int, validation: bool):
+    def __init__(self, audio_tokenizer: AdaptiveAudioAmplitudeTokenizer, build_text_tokenizer: Callable, sampling_rate: int, validation: bool = False):
 
         self.sampling_rate = sampling_rate
 
@@ -47,14 +47,10 @@ class TokenizedAudioWaveformCollator():
         bos_token = tokenizer.decode(tokenizer.bos_token_id)
         eos_token = tokenizer.decode(tokenizer.eos_token_id)
         tokenizer_input = []
-        audio_embeddings_start = []
-        audio_embeddings_end = []
-        audio_embeddings_lengths = []
 
-        good_items = []
         segments_boarders = []
         audio_segments_waveforms = []
-        segment_frames_len = []
+        segments_max_frame_len = []
 
         for i, item in enumerate(items):
             words = item['words']
@@ -75,33 +71,12 @@ class TokenizedAudioWaveformCollator():
             frames_boarders_raw = np.array(segments_frames)
             frames_boarders = frames_boarders_raw.cumsum()
 
-            segment_index_left = np.searchsorted(frames_boarders, frame_boarder_left)
-
-            segment_index_right = np.searchsorted(frames_boarders, frame_boarder_right) + 1
-            segment_index_right = min(segment_index_right, len(segments_frames)-1)
-
-            assert segment_index_right > segment_index_left
-
-            item_seq_len = segment_index_right - segment_index_left
-            # if not validation and item_seq_len > 20:
-            #     print("Too long segment:", item['id'], words_start_idx, words, first_word_second, last_word_second, item_seq_len)
-            #     continue
-
             tokenizer_input.append(text_for_item)
-            audio_embeddings_lengths.append(item_seq_len)
-            audio_embeddings_start.append(segment_index_left)
-            audio_embeddings_end.append(segment_index_right)
 
-            segment_frame_start = frames_boarders[segment_index_left]
-            segment_frame_end =   frames_boarders[segment_index_right]
-            assert segment_frame_start < segment_frame_end
+            audio_segments_waveforms.append(item['audio']['array'])
 
-            audio_segments_waveforms.append(item['audio']['array'][segment_frame_start:segment_frame_end])
-
-            good_items.append(item)
-            segment_boarders = frames_boarders[segment_index_left:(segment_index_right+1)] - frames_boarders[segment_index_left]
-            segments_boarders.append( segment_boarders )
-            segment_frames_len.append(frames_boarders_raw.max())
+            segments_boarders.append( frames_boarders )
+            segments_max_frame_len.append(frames_boarders_raw.max())
 
 
         tokenized_caption = tokenizer(tokenizer_input, padding=True)
@@ -130,7 +105,7 @@ class TokenizedAudioWaveformCollator():
 
         result['segments_boarders_padded'] = segments_boarders_padded
         result['segments_boarders_attention_mask'] = segments_boarders_attention_mask
-        result['segments_frames_len'] = torch.tensor(segment_frames_len)
+        result['segments_max_frame_len'] = torch.tensor(segments_max_frame_len)
 
         return result
 

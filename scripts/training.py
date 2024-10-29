@@ -26,6 +26,7 @@ from aat.tokenizer import AdaptiveAudioAmplitudeTokenizer
 from aat.training.config import TrainConfig, overfit_one_batch_train_config, full_unfreeze_train_config
 from aat.training.validate import val_loop
 from aat.training.train import train_loop
+from aat.training.dataloaders import build_dataloaders
 
 from aat.training.collate import TokenizedAudioWaveformCollator
 
@@ -56,7 +57,10 @@ def train(
         ):
 
     optimizer = Adam(model.parameters(), lr=train_config.learning_rate)
-    optimizer_lr_scheduler = CyclicLR(optimizer, base_lr=train_config.learning_rate, max_lr=train_config.max_lr, step_size_up=train_config.step_size_up)
+
+    optimizer_lr_scheduler = None
+    # if train_config.max_lr > 0.0:
+    #     optimizer_lr_scheduler = CyclicLR(optimizer, base_lr=train_config.learning_rate, max_lr=train_config.max_lr, step_size_up=train_config.step_size_up)
 
     # Иногда pad_token_id == eos_token_id,
     # но мы хотим, чтобы модель умела предсказывать eos_token_id
@@ -96,43 +100,6 @@ def train(
     accelerator.end_training()
 
 
-
-def get_collate_fn(train_config: TrainConfig, validation=False):
-    max_segment_duration_milliseconds = int(train_config.max_segment_waveform_frames * 1000 / train_config.sampling_rate)
-    audio_tokenizer = AdaptiveAudioAmplitudeTokenizer(
-        max_segment_duration_milliseconds=max_segment_duration_milliseconds,
-    )
-
-    def build_text_tokenizer():
-        return get_tokenizer(train_config)
-
-    return TokenizedAudioWaveformCollator(
-        audio_tokenizer,
-        build_text_tokenizer,
-        sampling_rate=train_config.sampling_rate,
-        validation=validation
-    )
-
-def get_train_dataloader(audio_stt_dataset, train_config: TrainConfig, tokenizer):
-
-    if train_config.few_train_samples is not None:
-        audio_stt_dataset = audio_stt_dataset.select(range(train_config.few_train_samples))
-
-    return DataLoader(audio_stt_dataset, collate_fn=get_collate_fn(train_config),
-                      batch_size=train_config.train_batch_size, num_workers=train_config.dataloader_num_workers,
-                      drop_last=True, pin_memory=True)
-
-
-def get_val_dataloader(audio_stt_dataset, train_config: TrainConfig, tokenizer):
-
-    if train_config.few_val_samples is not None:
-        audio_stt_dataset = audio_stt_dataset.select(range(train_config.few_val_samples))
-
-    return DataLoader(audio_stt_dataset,
-                      collate_fn=get_collate_fn(train_config, validation=True),
-                      batch_size=train_config.val_batch_size, pin_memory=True)
-
-
 def freeze_model(model):
     for p in model.parameters():
         p.requires_grad = False
@@ -143,7 +110,7 @@ def unfreeze_model(model):
         p.requires_grad = True
     return
 
-def get_lm_decoder(train_config: TrainConfig, from_pretrained=None, device=None):
+def build_lm_decoder(train_config: TrainConfig, from_pretrained=None, device=None):
 
     print("from_pretrained", from_pretrained)
     lm_decoder = LlamaForCausalLM.from_pretrained(from_pretrained)
@@ -153,7 +120,7 @@ def get_lm_decoder(train_config: TrainConfig, from_pretrained=None, device=None)
     return lm_decoder
 
 
-def get_audio_encoder(train_config: TrainConfig):
+def build_audio_encoder(train_config: TrainConfig):
 
     config_path = 'data/speechtokenizer/config.json'
     ckpt_path = 'data/speechtokenizer/ckpt.dev'
@@ -163,7 +130,7 @@ def get_audio_encoder(train_config: TrainConfig):
     return model
 
 
-def get_model(train_config: TrainConfig, from_pretrained=None, device=None):
+def build_model(train_config: TrainConfig, from_pretrained=None, device=None):
 
     # lm_decoder = LlamaForCausalLM.from_pretrained("data/models/hearty-shadow-9/last")
 
@@ -171,14 +138,14 @@ def get_model(train_config: TrainConfig, from_pretrained=None, device=None):
     tokenizer.add_bos_token = True
     tokenizer.add_eos_token = True
 
-    audio_encoder = get_audio_encoder(train_config)
+    audio_encoder = build_audio_encoder(train_config)
 
     if from_pretrained is not None:
-        lm_decoder = get_lm_decoder(train_config, from_pretrained=from_pretrained, device=device)
+        lm_decoder = build_lm_decoder(train_config, from_pretrained=from_pretrained, device=device)
 
         model = TokenizedSpeechLM.from_pretrained(audio_encoder, lm_decoder, from_pretrained)
     else:
-        lm_decoder = get_lm_decoder(train_config, from_pretrained=train_config.lm_pretrained_model, device=device)
+        lm_decoder = build_lm_decoder(train_config, from_pretrained=train_config.lm_pretrained_model, device=device)
         model = TokenizedSpeechLM(audio_encoder, lm_decoder)
 
         model.reinitialize_weights()
@@ -195,49 +162,12 @@ def get_model(train_config: TrainConfig, from_pretrained=None, device=None):
 
     return model, tokenizer
 
-def get_tokenizer(train_config: TrainConfig, tokenizer_config=None):
-    tokenizer = AutoTokenizer.from_pretrained(train_config.lm_pretrained_model, config=tokenizer_config)
-    tokenizer.add_bos_token = True
-    tokenizer.add_eos_token = True
-
-    return tokenizer
-
-def get_dataloaders(train_config: TrainConfig, tokenizer):
-    # full_audio_stt_dataset: datasets.Dataset = datasets.load_from_disk(train_config.train_dataset_path)
-    # train_test_audio_stt_dataset = full_audio_stt_dataset.train_test_split(test_size=1000, seed=1)
-
-    dataset_files = [ f'libris/train-{i:05}-of-00064.parquet' for i in range(train_config.dataset_shards) ] # 1 shard = 1 gb of data
-    print("dataset_files", dataset_files)
-    if train_config.few_train_samples:
-        assert train_config.dataset_shards == 1, 'only one dataset shard is allowed with few_train_samples due to streaming is not possible with few samples'
-        audio_dataset = datasets.load_dataset("nguyenvulebinh/asr-alignment", split=datasets.Split.TRAIN, data_files=dataset_files, streaming=False)
-    else:
-        audio_dataset = datasets.load_dataset("nguyenvulebinh/asr-alignment", split=datasets.Split.TRAIN, data_files=dataset_files, streaming=True)
-
-    test_dataset_files = [ f'libris/train-00063-of-00064.parquet' ] # 1 shard = 1 gb of data
-    audio_dataset_test = datasets.load_dataset("nguyenvulebinh/asr-alignment", split=datasets.Split.TRAIN, data_files=test_dataset_files, streaming=False)
-    # audio_dataset = load_dataset("nguyenvulebinh/asr-alignment", 'libris', split=datasets.Split.TRAIN, streaming=True)
-    audio_dataset.cast_column('audio', datasets.Audio(sampling_rate=train_config.sampling_rate))
-    audio_dataset_test.cast_column('audio', datasets.Audio(sampling_rate=train_config.sampling_rate))
-
-    train_test_audio_stt_dataset = audio_dataset_test.train_test_split(test_size=1000, seed=1)
-
-    logger.info("load train dataloader")
-    train_dataloader = get_train_dataloader(
-        audio_dataset, train_config, tokenizer
-    )
-    logger.info("load val dataloader")
-    val_dataloader = get_val_dataloader(
-        train_test_audio_stt_dataset['test'], train_config, tokenizer
-    )
-
-    return train_dataloader, val_dataloader
-
 
 if __name__ == '__main__':
 
     parser = argparse.ArgumentParser()
-    parser.add_argument('-c', '--config')
+    # parser.add_argument('-c', '--config')
+    parser.add_argument('-t', '--test-run', action='store_true', default=False)
 
     args = parser.parse_args()
 
@@ -246,18 +176,21 @@ if __name__ == '__main__':
     #     config_json_data = f.read()
     # train_config = TrainConfig.model_validate_json(config_json_data)
 
-    train_config = full_unfreeze_train_config()
+    if args.test_run:
+        train_config = overfit_one_batch_train_config()
+    else:
+        train_config = full_unfreeze_train_config()
 
     device = train_config.nn_device
     logger.info(f"device {device}")
 
     logger.info("load language model")
 
-    model, tokenizer = get_model(train_config, device=device)
+    model, tokenizer = build_model(train_config, device=device)
 
     logger.info("model was loaded")
 
-    train_dataloader, val_dataloader = get_dataloaders(train_config, tokenizer)
+    train_dataloader, val_dataloader = build_dataloaders(train_config)
 
     logger.info("run training")
 
@@ -288,4 +221,3 @@ if __name__ == '__main__':
         device=device,
         device_placement=True,
     )
-

@@ -9,6 +9,8 @@ from tqdm.auto import tqdm
 
 import accelerate
 
+from datasets import IterableDataset
+
 from aat.model import TokenizedSpeechLM
 from aat.training.config import TrainConfig
 from aat.training.batch_prepare import prepare_model_inputs_from_batch
@@ -19,11 +21,13 @@ def train_loop(accelerator: accelerate.Accelerator, train_config: TrainConfig, m
 
     last_time = time.time()
 
+    if isinstance(train_dataloader.dataset, IterableDataset):
+        # reshuffle steaming dataset
+        train_dataloader.dataset.set_epoch(epoch)
+
     for batch_i, batch in enumerate(train_dataloader):
-        # with accelerator.accumulate(model):
 
         model_inputs_with_audio = prepare_model_inputs_from_batch(train_config, model, batch, device=device)
-        # print("model_inputs_with_audio['attention_mask']", model_inputs_with_audio['attention_mask'].shape)
 
         model_prediction = model.forward(**model_inputs_with_audio)
 
@@ -31,13 +35,11 @@ def train_loop(accelerator: accelerate.Accelerator, train_config: TrainConfig, m
         batch_input_ids = batch['input_ids'].to(device)
         batch_input_ids_attention_mask = batch['input_ids_attention_mask'].to(device)
         caption_legth = batch_input_ids.shape[1]
-        # print("caption_legth", caption_legth, "model_prediction.logits.shape", model_prediction.logits.shape)
         model_prediction_caption = model_prediction.logits[:, -caption_legth:-1, :]  # [ bs, caption_length - 1, vocad_size ]
 
         shifted_batch_input_ids = batch_input_ids[:, 1:]  # [ bs, caption_length - 1 ]
         shifted_input_ids_attention_mask = batch_input_ids_attention_mask[:, 1:]
-        # logger.info(f"model_prediction_caption {model_prediction_caption.shape}")
-        # logger.info(f"batch_input_ids {shifted_batch_input_ids.shape}")
+
         model_prediction_caption_flatten = model_prediction_caption.flatten(0, 1)
         input_ids_flatten = shifted_batch_input_ids.flatten(0, 1)
         input_ids_attention_mask_flatten = shifted_input_ids_attention_mask.flatten(0, 1).bool()
@@ -46,9 +48,6 @@ def train_loop(accelerator: accelerate.Accelerator, train_config: TrainConfig, m
         model_prediction_caption_flatten = model_prediction_caption_flatten[input_ids_attention_mask_flatten]
         input_ids_flatten = input_ids_flatten[input_ids_attention_mask_flatten]
 
-        # print("input_ids_attention_mask_flatten", input_ids_attention_mask_flatten.sum(), '/', input_ids_attention_mask_flatten.numel())
-        # print("model_prediction_caption_flatten masked", model_prediction_caption_flatten.shape)
-        # print("input_ids_flatten masked", input_ids_flatten.shape)
 
         loss = criterion(model_prediction_caption_flatten, input_ids_flatten)
 
@@ -60,7 +59,6 @@ def train_loop(accelerator: accelerate.Accelerator, train_config: TrainConfig, m
         text_embeddings = model_inputs_with_audio['inputs_embeds'][:, audio_embeds_len+1:, :].flatten(0, 1)[model_inputs_with_audio['attention_mask'][:, audio_embeds_len+1:].flatten().bool()]
         text_embeddings_norm_mean = text_embeddings.norm(2, dim=-1).mean().item()
         text_embeddings_mean = text_embeddings.mean(dim=-1).mean().item()
-        # print("text_embeddings_norm_mean", text_embeddings_norm_mean, "audio_embeddings_norm_mean", audio_embeddings_norm_mean)
 
         audio_bos_mean = model.audio_tokens_embeddings.weight[0].mean().item()
         audio_bos_norm = model.audio_tokens_embeddings.weight[0].norm(2).item()
@@ -89,9 +87,9 @@ def train_loop(accelerator: accelerate.Accelerator, train_config: TrainConfig, m
         torch.nn.utils.clip_grad_norm_(model.parameters(), 1)
 
         optimizer.step()
-        optimizer_lr_scheduler.step()
-
-        step_metrics['learning_rate'] = optimizer_lr_scheduler.get_last_lr()[0]
+        if optimizer_lr_scheduler is not None:
+            optimizer_lr_scheduler.step()
+            step_metrics['learning_rate'] = optimizer_lr_scheduler.get_last_lr()[0]
 
         progress_bar.update(1)
         progress_bar.set_description(f'Epoch={epoch} Loss={loss.item():.3f} WER={last_validation_wer:.3f}')

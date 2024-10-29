@@ -1,6 +1,6 @@
 import torch
 
-from scripts.training import val_loop, TrainConfig, get_model, get_val_dataloader, get_dataloaders
+from scripts.training import val_loop, TrainConfig, build_model, build_val_dataloader, build_dataloaders
 
 import evaluate
 
@@ -10,9 +10,9 @@ if __name__ == "__main__":
     train_config.val_batch_size = 1
     device = 'cuda' if torch.cuda.is_available() else 'cpu'
 
-    model, tokenizer, audio_processor = get_model(train_config, from_pretrained="data/models/bumbling-vortex-3/last/", device=device)
+    model, tokenizer, audio_processor = build_model(train_config, from_pretrained="data/models/bumbling-vortex-3/last/", device=device)
 
-    train_dataloader, val_dataloader = get_dataloaders(train_config, tokenizer, audio_processor)
+    train_dataloader, val_dataloader = build_dataloaders(train_config, tokenizer, audio_processor)
 
     captioning_metrics = evaluate.combine(
         [
