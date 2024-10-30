@@ -13,29 +13,13 @@ from aat.training.config import TrainConfig, SegmentProjectionEnum
 def _inplace_audio_encode_batch_speechtokenizer(train_config: TrainConfig, model: TokenizedSpeechLM, batch, device=None):
 
     segments_boarders_padded = batch['segments_boarders_padded']
-    segments_boarders_attention_mask = batch['segments_boarders_attention_mask'] # [ bs, segments_count ]
+    segments_boarders_attention_mask = batch['segments_boarders_attention_mask'].to(device) # [ bs, segments_count ]
 
     batch_size = segments_boarders_padded.shape[0]
     segments_count = segments_boarders_padded.shape[1]
 
-    max_segment_waveform_frames = train_config.max_segment_waveform_frames
-    batched_segments = torch.zeros([batch_size, segments_count, max_segment_waveform_frames], device=device)
-
-    waveforms_mask = torch.zeros_like(batched_segments)
-
-    for batch_i in range(batch_size):
-        prev_segment_boarder = 0
-        for segment_i in range(segments_count):
-            segment_boarder = segments_boarders_padded[batch_i, segment_i]
-            if segment_i > 0 and segment_boarder == 0:
-                break
-            segment_waveform = batch['audio_input_values'][batch_i, prev_segment_boarder:segment_boarder]
-            batched_segments[batch_i, segment_i, :segment_waveform.shape[0]] = segment_waveform
-            waveforms_mask[batch_i, segment_i, :segment_waveform.shape[0]] = 1
-            prev_segment_boarder = segment_boarder
-
     # [ bs * segments_count, max_segment_waveform_frames ]
-    batched_segments = batched_segments.flatten(0,1)
+    batched_segments = batch['batched_segments'].flatten(0,1).to(device)
 
     audio_codes = model.audio_encoder.encode(
         batched_segments.unsqueeze(1),
@@ -44,10 +28,10 @@ def _inplace_audio_encode_batch_speechtokenizer(train_config: TrainConfig, model
     # [ bs * segments_count, seq_len ]
     audio_codes = audio_codes.squeeze(0)
     # [ bs * segments_count, max_segment_waveform_frames ]
-    waveforms_mask = waveforms_mask.flatten(0, 1)
+    segments_waveforms_mask = batch['segments_waveforms_mask'].flatten(0, 1).to(device)
 
     compression_factor = batched_segments.shape[-1] / audio_codes.shape[-1]
-    compressed_seq_lengths = torch.round(waveforms_mask.sum(dim=-1) / compression_factor).to(torch.long)
+    compressed_seq_lengths = torch.round(segments_waveforms_mask.sum(dim=-1) / compression_factor).to(torch.long)
 
     assert (compressed_seq_lengths != 0).any()
 

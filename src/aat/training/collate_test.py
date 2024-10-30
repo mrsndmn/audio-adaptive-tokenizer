@@ -15,7 +15,7 @@ def test_collate():
     audio_tokenizer = AdaptiveAudioAmplitudeTokenizer()
 
     sampling_rate = 16000
-    collator = TokenizedAudioWaveformCollator(audio_tokenizer, build_text_tokenizer, sampling_rate=sampling_rate)
+    collator = TokenizedAudioWaveformCollator(audio_tokenizer, build_text_tokenizer, sampling_rate=sampling_rate, max_segment_waveform_frames=4000)
 
     collator_items = [
         {

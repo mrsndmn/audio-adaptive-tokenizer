@@ -34,6 +34,7 @@ def build_collate_fn(train_config: TrainConfig, validation=False):
         audio_tokenizer,
         build_text_tokenizer,
         sampling_rate=train_config.sampling_rate,
+        max_segment_waveform_frames=train_config.max_segment_waveform_frames,
         validation=validation
     )
 
@@ -44,9 +45,11 @@ def build_train_dataloader(audio_stt_dataset, train_config: TrainConfig):
         audio_stt_dataset = audio_stt_dataset.select(range(train_config.few_train_samples))
         shuffle = True
 
+    persistent_workers = True if train_config.dataloader_num_workers > 0 else False
+
     return DataLoader(audio_stt_dataset, collate_fn=build_collate_fn(train_config),
                       batch_size=train_config.train_batch_size, num_workers=train_config.dataloader_num_workers,
-                      drop_last=True, pin_memory=True, shuffle=shuffle)
+                      drop_last=True, pin_memory=True, shuffle=shuffle, persistent_workers=persistent_workers)
 
 
 def build_val_dataloader(audio_stt_dataset, train_config: TrainConfig):

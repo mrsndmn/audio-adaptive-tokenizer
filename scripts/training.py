@@ -212,7 +212,7 @@ if __name__ == '__main__':
     logger.info(f"trainable model parameters: {trainable_parameters_count}")
     logger.info(f"total model parameters: {total_parameters_count}")
 
-    os.environ["TOKENIZERS_PARALLELISM"] = "true"
+    os.environ["TOKENIZERS_PARALLELISM"] = "false"
 
     import cProfile
     with cProfile.Profile() as pr:

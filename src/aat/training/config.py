@@ -117,13 +117,13 @@ def full_unfreeze_train_config():
 
     return TrainConfig(
         num_epochs = 100,
-        train_batch_size = 25,
+        train_batch_size = 10,
         val_batch_size = 1,
         learning_rate = 1e-4,
         # gradient_accumulation_steps = 2
 
-        evaluate_every_epoch_mod = 5,
-        save_model_every_epoch_mod = 5,
+        evaluate_every_epoch_mod = 1,
+        save_model_every_epoch_mod = 1,
 
         no_validation = False,
 
@@ -134,9 +134,9 @@ def full_unfreeze_train_config():
         audio_encoder_pretrained_model = "facebook/hubert-large-ls960-ft",
         lm_pretrained_model = "HuggingFaceTB/SmolLM-135M-Instruct",
 
-        segment_projection = SegmentProjectionEnum.linear,
+        segment_projection = SegmentProjectionEnum.bert,
 
-        optim_lm = True,
+        optim_lm = False,
         optim_audio_encoder = False,
 
         # Data
@@ -144,7 +144,7 @@ def full_unfreeze_train_config():
         few_val_samples = 100,
         dataloader_num_workers = 50,
 
-        train_dataset_path = "data/libris_with_segments_1_shard.dataset",
+        train_dataset_path = "data/libris_with_segments_shard_1-4.dataset/",
         validation_dataset_path = "data/libris_with_segments_valid.dataset",
     )
 
