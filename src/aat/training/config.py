@@ -117,7 +117,7 @@ def full_unfreeze_train_config():
 
     return TrainConfig(
         num_epochs = 100,
-        train_batch_size = 10,
+        train_batch_size = 25,
         val_batch_size = 1,
         learning_rate = 1e-4,
         # gradient_accumulation_steps = 2
@@ -142,7 +142,7 @@ def full_unfreeze_train_config():
         # Data
         few_train_samples = None,
         few_val_samples = 100,
-        dataloader_num_workers = 50,
+        dataloader_num_workers = 10,
 
         train_dataset_path = "data/libris_with_segments_shard_1-4.dataset/",
         validation_dataset_path = "data/libris_with_segments_valid.dataset",
