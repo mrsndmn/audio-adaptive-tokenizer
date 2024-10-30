@@ -21,12 +21,15 @@ def _inplace_audio_encode_batch_speechtokenizer(train_config: TrainConfig, model
     # [ bs * segments_count, max_segment_waveform_frames ]
     batched_segments = batch['batched_segments'].flatten(0,1).to(device)
 
-    audio_codes = model.audio_encoder.encode(
-        batched_segments.unsqueeze(1),
-        n_q=1,
-    )
+    with torch.no_grad():
+        audio_codes = model.audio_encoder.encode(
+            batched_segments.unsqueeze(1),
+            n_q=1,
+        )
+
     # [ bs * segments_count, seq_len ]
     audio_codes = audio_codes.squeeze(0)
+
     # [ bs * segments_count, max_segment_waveform_frames ]
     segments_waveforms_mask = batch['segments_waveforms_mask'].flatten(0, 1).to(device)
 

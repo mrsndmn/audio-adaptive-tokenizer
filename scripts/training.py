@@ -1,4 +1,5 @@
 import os
+import cProfile
 
 import argparse
 
@@ -170,6 +171,7 @@ if __name__ == '__main__':
     parser = argparse.ArgumentParser()
     # parser.add_argument('-c', '--config')
     parser.add_argument('-t', '--test-run', action='store_true', default=False)
+    parser.add_argument('-p', '--profile', action='store_true', default=False)
 
     args = parser.parse_args()
 
@@ -194,8 +196,6 @@ if __name__ == '__main__':
 
     train_dataloader, val_dataloader = build_dataloaders(train_config)
 
-    logger.info("run training")
-
     captioning_metrics = evaluate.combine(
         [
             evaluate.load("bleu", keep_in_memory=True),
@@ -214,8 +214,7 @@ if __name__ == '__main__':
 
     os.environ["TOKENIZERS_PARALLELISM"] = "false"
 
-    import cProfile
-    with cProfile.Profile() as pr:
+    def run_training():
         train(
             model=model,
             tokenizer=tokenizer,
@@ -227,4 +226,14 @@ if __name__ == '__main__':
             device=device,
             device_placement=True,
         )
-        pr.dump_stats("train_profile.prof")
+
+    if args.profile:
+        logger.info("Run training with profiling")
+        with cProfile.Profile() as pr:
+            run_training()
+
+            profile_file_name = "train_profile.prof"
+            logger.info(f"Save profile: {profile_file_name}")
+            pr.dump_stats(profile_file_name)
+    else:
+        run_training()

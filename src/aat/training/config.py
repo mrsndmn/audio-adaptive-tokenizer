@@ -82,7 +82,7 @@ def overfit_one_batch_train_config():
 
     return TrainConfig(
         num_epochs = 1,
-        train_batch_size = 25,
+        train_batch_size = 10,
         val_batch_size = 1,
         learning_rate = 1e-4,
         # gradient_accumulation_steps = 2
