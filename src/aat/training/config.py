@@ -119,7 +119,7 @@ def full_unfreeze_train_config():
         num_epochs = 100,
         train_batch_size = 25,
         val_batch_size = 1,
-        learning_rate = 1e-4,
+        learning_rate = 5e-5,
         # gradient_accumulation_steps = 2
 
         evaluate_every_epoch_mod = 1,
@@ -136,7 +136,7 @@ def full_unfreeze_train_config():
 
         segment_projection = SegmentProjectionEnum.linear,
 
-        optim_lm = False,
+        optim_lm = True,
         optim_audio_encoder = False,
 
         # Data

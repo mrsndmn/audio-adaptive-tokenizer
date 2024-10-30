@@ -224,7 +224,7 @@ class TokenizedSpeechLM(nn.Module):
         if hasattr(model, 'audio_embeddings_pooling'):
             audio_embeddings_pooling_state_dict_path = os.path.join(model_id, "audio_embeddings_pooling.pt")
             audio_embeddings_pooling_state_dict = torch.load(audio_embeddings_pooling_state_dict_path, map_location=torch.device('cpu'))
-            model.speech_tokenizer_embeddings.load_state_dict(audio_embeddings_pooling_state_dict)
+            model.audio_embeddings_pooling.load_state_dict(audio_embeddings_pooling_state_dict)
 
         if hasattr(model, 'speech_tokenizer_projection'):
             speech_tokenizer_projection_state_dict_path = os.path.join(model_id, "speech_tokenizer_projection.pt")
