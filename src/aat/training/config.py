@@ -134,7 +134,7 @@ def full_unfreeze_train_config():
         audio_encoder_pretrained_model = "facebook/hubert-large-ls960-ft",
         lm_pretrained_model = "HuggingFaceTB/SmolLM-135M-Instruct",
 
-        segment_projection = SegmentProjectionEnum.bert,
+        segment_projection = SegmentProjectionEnum.linear,
 
         optim_lm = False,
         optim_audio_encoder = False,

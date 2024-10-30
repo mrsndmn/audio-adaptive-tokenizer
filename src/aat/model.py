@@ -80,6 +80,9 @@ class TokenizedSpeechLM(nn.Module):
             nn.init.normal_(self.audio_embeddings_pooling.l_in.weight, mean=0, std=std)
             nn.init.normal_(self.audio_embeddings_pooling.l_out.weight, mean=0, std=std)
 
+        if hasattr(self, 'speech_tokenizer_projection'):
+            nn.init.normal_(self.speech_tokenizer_projection.weight, mean=0, std=std)
+
         return
 
     def prepare_audio_embeddings(self, audio_embeds):
@@ -166,6 +169,12 @@ class TokenizedSpeechLM(nn.Module):
         if hasattr(self, 'speech_tokenizer_embeddings'):
             torch.save(self.speech_tokenizer_embeddings.state_dict(), os.path.join(save_directory, "speech_tokenizer_embeddings.pt"))
 
+        if hasattr(self, 'audio_embeddings_pooling'):
+            torch.save(self.audio_embeddings_pooling.state_dict(), os.path.join(save_directory, "audio_embeddings_pooling.pt"))
+
+        if hasattr(self, 'speech_tokenizer_projection'):
+            torch.save(self.speech_tokenizer_projection.state_dict(), os.path.join(save_directory, "speech_tokenizer_projection.pt"))
+
         self.lm_decoder.save_pretrained(save_directory)
         # self.config.save_pretrained(save_directory)
 
@@ -190,5 +199,15 @@ class TokenizedSpeechLM(nn.Module):
             speech_tokenizer_embeddings_state_dict_path = os.path.join(model_id, "speech_tokenizer_embeddings.pt")
             speech_tokenizer_embeddings_state_dict = torch.load(speech_tokenizer_embeddings_state_dict_path, map_location=torch.device('cpu'))
             model.speech_tokenizer_embeddings.load_state_dict(speech_tokenizer_embeddings_state_dict)
+
+        if hasattr(model, 'audio_embeddings_pooling'):
+            audio_embeddings_pooling_state_dict_path = os.path.join(model_id, "audio_embeddings_pooling.pt")
+            audio_embeddings_pooling_state_dict = torch.load(audio_embeddings_pooling_state_dict_path, map_location=torch.device('cpu'))
+            model.speech_tokenizer_embeddings.load_state_dict(audio_embeddings_pooling_state_dict)
+
+        if hasattr(model, 'speech_tokenizer_projection'):
+            speech_tokenizer_projection_state_dict_path = os.path.join(model_id, "speech_tokenizer_projection.pt")
+            speech_tokenizer_projection_state_dict = torch.load(speech_tokenizer_projection_state_dict_path, map_location=torch.device('cpu'))
+            model.speech_tokenizer_projection.load_state_dict(speech_tokenizer_projection_state_dict)
 
         return model
