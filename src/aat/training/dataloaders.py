@@ -77,6 +77,8 @@ def build_dataloaders(train_config: TrainConfig):
 
     audio_dataset = datasets.load_from_disk(train_config.train_dataset_path)
     # audio_dataset = audio_dataset.to_iterable_dataset()
+    audio_dataset = audio_dataset.to_iterable_dataset()
+    audio_dataset = audio_dataset.shuffle(seed=42, buffer_size=1000)
 
     audio_dataset_val = datasets.load_from_disk(train_config.validation_dataset_path)
 
