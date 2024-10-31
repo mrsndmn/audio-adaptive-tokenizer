@@ -109,7 +109,7 @@ class TokenizedSpeechLM(nn.Module):
         elif self.audio_encoder_type == AudioEncoderType.hubert:
             with torch.no_grad():
                 audio_hidden_states = self.audio_encoder(
-                    input_values=waveform.half(),
+                    input_values=waveform.to(torch.float16),
                     attention_mask=waveforms_mask,
                 ).last_hidden_state
 
@@ -238,10 +238,10 @@ class TokenizedSpeechLM(nn.Module):
         return
 
     @classmethod
-    def from_pretrained(cls, audio_encoder, lm_model, projection_type, model_id: str):
+    def from_pretrained(cls, audio_encoder, lm_model, projection_type, audio_encoder_type, model_id: str):
         print("load TokenizedSpeechLM from", model_id)
 
-        model = cls(audio_encoder, lm_model, projection_type=projection_type)
+        model = cls(audio_encoder, lm_model, projection_type=projection_type, audio_encoder_type=audio_encoder_type)
 
         audio_tokens_embeddings_path = os.path.join(model_id, "audio_tokens_embeddings.pt")
         audio_tokens_embeddings_state = torch.load(audio_tokens_embeddings_path, map_location=torch.device('cpu'))

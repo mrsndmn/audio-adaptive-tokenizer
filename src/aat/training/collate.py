@@ -3,6 +3,8 @@ from typing import Callable, List, Dict
 import numpy as np
 import torch
 
+from transformers import AutoProcessor
+
 from aat.tokenizer import AdaptiveAudioAmplitudeTokenizer
 from aat.audio import AudioWaveform
 from aat.training.config import TrainConfig, SegmentationType
@@ -26,6 +28,8 @@ class TokenizedAudioWaveformCollator():
         self.audio_tokenizer = audio_tokenizer
         self.build_text_tokenizer = build_text_tokenizer
         self.tokenizer = self.build_text_tokenizer()
+
+        self.audio_processor = AutoProcessor.from_pretrained("facebook/hubert-large-ls960-ft")
 
         return
 
@@ -179,8 +183,19 @@ class TokenizedAudioWaveformCollator():
         max_segment_waveform_frames = self.max_segment_waveform_frames
         batched_segments = torch.zeros([batch_size, segments_count, max_segment_waveform_frames])
 
-        segments_waveforms_mask = torch.zeros_like(batched_segments)
+        # segments_waveforms_mask = torch.zeros_like(batched_segments)
+        # for batch_i in range(batch_size):
+        #     prev_segment_boarder = 0
+        #     for segment_i in range(segments_count):
+        #         segment_boarder = segments_boarders_padded[batch_i, segment_i]
+        #         if segment_i > 0 and segment_boarder == 0:
+        #             break
+        #         segment_waveform = result['audio_input_values'][batch_i, prev_segment_boarder:segment_boarder]
+        #         batched_segments[batch_i, segment_i, :segment_waveform.shape[0]] = segment_waveform
+        #         segments_waveforms_mask[batch_i, segment_i, :segment_waveform.shape[0]] = 1
+        #         prev_segment_boarder = segment_boarder
 
+        segments_for_padding = []
         for batch_i in range(batch_size):
             prev_segment_boarder = 0
             for segment_i in range(segments_count):
@@ -188,12 +203,13 @@ class TokenizedAudioWaveformCollator():
                 if segment_i > 0 and segment_boarder == 0:
                     break
                 segment_waveform = result['audio_input_values'][batch_i, prev_segment_boarder:segment_boarder]
-                batched_segments[batch_i, segment_i, :segment_waveform.shape[0]] = segment_waveform
-                segments_waveforms_mask[batch_i, segment_i, :segment_waveform.shape[0]] = 1
+                segments_for_padding.append(segment_waveform)
                 prev_segment_boarder = segment_boarder
 
-        result['batched_segments'] = batched_segments
-        result['segments_waveforms_mask'] = segments_waveforms_mask
+
+        segments_padded_normalized_with_mask = self.audio_processor(batched_segments, return_tensors="pt", padding=True, sampling_rate=self.train_config.sampling_rate)
+        result['batched_segments'] = segments_padded_normalized_with_mask.input_values
+        result['segments_waveforms_mask'] = segments_padded_normalized_with_mask.attention_mask
 
         return result
 

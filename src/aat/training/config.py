@@ -164,10 +164,10 @@ def full_unfreeze_train_config():
         audio_encoder_type = AudioEncoderType.hubert,
         audio_encoder_pretrained_model = "facebook/hubert-large-ls960-ft",
         lm_pretrained_model = "HuggingFaceTB/SmolLM-135M-Instruct",
-        from_pretrained = 'data/models/creepy-wraith-137/last',
+        from_pretrained = None,
 
-        optim_lm = True,
-        unfreeze_lm_at_epoch = None,
+        optim_lm = False,
+        unfreeze_lm_at_epoch = 2,
         optim_audio_encoder = False,
 
         segment_projection = SegmentProjectionEnum.linear,

@@ -57,7 +57,7 @@ def _inplace_audio_encode_batch_speechtokenizer(train_config: TrainConfig, model
     elif train_config.segment_projection == SegmentProjectionEnum.linear:
         # seq_len is fixed due to each segment has fixed len
         # [ bs * segments_count, seq_len * embedding_dim ]
-        audio_hidden_states = audio_hidden_states.flatten(1, 2)
+        audio_hidden_states = audio_hidden_states.flatten(1, 2) / audio_hidden_states.shape[1]
 
         # [ bs * segments_count, embedding_dim ]
         audio_hidden_states = model.audio_encoder_projection(audio_hidden_states)
