@@ -22,7 +22,8 @@ def _inplace_audio_encode_batch_speechtokenizer(train_config: TrainConfig, model
     batched_segments = batch['batched_segments'].flatten(0,1).to(device)
     segments_waveforms_mask = batch['segments_waveforms_mask'].flatten(0, 1).to(device)
 
-
+    # audio_hidden_states ~ [ bs * segments_count, seq_len, embedding_dim ]
+    # embeddings_attention_mask ~ [ bs * segments_count, seq_len ]
     audio_hidden_states, embeddings_attention_mask = model.encode_audio(batched_segments, segments_waveforms_mask)
 
     if train_config.segment_projection == SegmentProjectionEnum.transformer_encoder:
