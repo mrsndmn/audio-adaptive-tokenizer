@@ -25,11 +25,13 @@ class AudioEmbeddingsPooling(nn.Module):
     def forward(self, inputs_embeds, encoder_attention_mask):
 
         projected_inputs = self.l_in(inputs_embeds)
-        bert_outputs = self.transformer_encoder(
+        transformer_encoder_outputs = self.transformer_encoder(
             src=projected_inputs,
-            src_key_padding_mask=encoder_attention_mask,
+            src_key_padding_mask=encoder_attention_mask.bool(),
         )
-        pooler_output = self.l_out(bert_outputs.pooler_output)
+
+        # [bs * segments_count, 576]
+        pooler_output = self.l_out(transformer_encoder_outputs[:, 0, :])
         pooler_output = F.normalize(pooler_output, dim=-1) * self.scale
 
         return pooler_output
@@ -52,7 +54,7 @@ class TokenizedSpeechLM(nn.Module):
             nn.Identity()
         )
 
-        if projection_type == SegmentProjectionEnum.bert:
+        if projection_type == SegmentProjectionEnum.transformer_encoder:
             self.audio_embeddings_pooling = AudioEmbeddingsPooling()
         elif projection_type == SegmentProjectionEnum.linear:
             WAV_TOKENIZER_CODES_LENGTH_FOR_LONGEST_AUDIO_SEGMENT = 13

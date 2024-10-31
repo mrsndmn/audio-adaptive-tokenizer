@@ -42,7 +42,7 @@ def _inplace_audio_encode_batch_speechtokenizer(train_config: TrainConfig, model
     codes_attention_mask = torch.arange(audio_codes.shape[-1], dtype=torch.long, device=device).unsqueeze(0).repeat(audio_codes.shape[0], 1)
     codes_attention_mask = (codes_attention_mask < compressed_seq_lengths.unsqueeze(1)).long()
 
-    if train_config.segment_projection == SegmentProjectionEnum.bert:
+    if train_config.segment_projection == SegmentProjectionEnum.transformer_encoder:
         cls_token = model.embeddings_count-1
         cls_token_tensor = torch.full([audio_codes.shape[0], 1], cls_token, device=device)
         audio_codes_with_cls = torch.cat([ cls_token_tensor, audio_codes ], dim=1)

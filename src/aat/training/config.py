@@ -14,7 +14,7 @@ class DeviceEnum(str, Enum):
     cpu  = "cpu"
 
 class SegmentProjectionEnum(str, Enum):
-    bert  = "bert"
+    transformer_encoder  = "transformer_encoder"
     mean = "mean"
     linear = "linear"
 
@@ -86,6 +86,10 @@ class TrainConfig(BaseExperiment):
     def validate_different_datasets(self):
         if self.train_dataset_path == self.validation_dataset_path:
             raise ValueError("Datasets must not be the same for validation and train")
+        
+        if self.segmentation == SegmentationType.uniform:
+            if self.max_segment_waveform_frames != self.uniform_segmentation_frames_per_segment:
+                raise ValueError("For uniform segmentation `uniform_segmentation_frames_per_segment` must be equal to `max_segment_waveform_frames`")
 
 
 def overfit_one_batch_train_config():
@@ -113,7 +117,7 @@ def overfit_one_batch_train_config():
         optim_lm = True,
         optim_audio_encoder = False,
 
-        segment_projection = SegmentProjectionEnum.mean,
+        segment_projection = SegmentProjectionEnum.transformer_encoder,
         segmentation = SegmentationType.uniform,
         uniform_segmentation_frames_per_segment = 400,
 
@@ -143,14 +147,14 @@ def full_unfreeze_train_config():
         no_validation = False,
 
         sampling_rate = 16000,
-        max_segment_waveform_frames = 4000,
+        max_segment_waveform_frames = 1600,
 
         # Model
         audio_encoder_pretrained_model = "facebook/hubert-large-ls960-ft",
         lm_pretrained_model = "HuggingFaceTB/SmolLM-135M-Instruct",
-        from_pretrained = "data/models/sinister-threshold-122/last",
+        from_pretrained = None,
 
-        optim_lm = True,
+        optim_lm = False,
         optim_audio_encoder = False,
 
         segment_projection = SegmentProjectionEnum.mean,
