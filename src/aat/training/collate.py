@@ -10,19 +10,19 @@ import random
 
 class TokenizedAudioWaveformCollator():
 
-    def __init__(self, audio_tokenizer: AdaptiveAudioAmplitudeTokenizer, build_text_tokenizer: Callable, sampling_rate: int, max_segment_waveform_frames: int, validation: bool = False, augmentation: bool = True):
+    def __init__(self, audio_tokenizer: AdaptiveAudioAmplitudeTokenizer, build_text_tokenizer: Callable, sampling_rate: int, max_segment_waveform_frames: int, n_words=None, noise_augmentation: bool = True):
 
         self.sampling_rate = sampling_rate
 
+        self.n_words = n_words
+
         self.max_segment_waveform_frames = max_segment_waveform_frames
 
-        self.augmentation = augmentation
+        self.noise_augmentation = noise_augmentation
 
         self.audio_tokenizer = audio_tokenizer
         self.build_text_tokenizer = build_text_tokenizer
         self.tokenizer = self.build_text_tokenizer()
-
-        self.validation = validation
 
         return
 
@@ -59,23 +59,56 @@ class TokenizedAudioWaveformCollator():
         segments_max_frame_len = []
 
         for i, item in enumerate(items):
-            words = item['words']
-            first_word_second = 0
-            last_word_second = item['word_end'][-1]
-
-            item_text = " ".join(words)
-            text_for_item = bos_token + item_text + eos_token
-
-            frame_boarder_left = int(first_word_second * self.sampling_rate)
-            frame_boarder_right = int(last_word_second * self.sampling_rate)
-
             waveform = np.array(item['audio']['array'])
 
-            if self.augmentation:
+            if self.noise_augmentation:
                 waveform += np.random.rand(waveform.shape[-1]) * 0.0003
 
             frames_boarders_raw = np.array(item['segment_frames'])
             frames_boarders = frames_boarders_raw.cumsum()
+
+            words = item['words']
+
+            word_start_idx = 0
+            word_end_idx = len(words) - 1
+            waveform_start_frame = 0
+            waveform_end_frame = waveform.shape[-1]
+
+            if self.n_words is not None and len(words) > self.n_words:
+                word_start_idx = random.randint(0, len(words)-self.n_words)
+                word_end_idx = word_start_idx + self.n_words
+                words = words[word_start_idx:word_end_idx]
+
+                waveform_start_frame = int(item['word_start'][word_start_idx] * self.sampling_rate)
+                waveform_end_frame   = int(item['word_end'][word_end_idx-1] * self.sampling_rate)
+
+                frames_boarders_with_zero = np.insert(frames_boarders, 0, [ 0 ])
+
+                waveform_start_segment_idx = np.searchsorted(frames_boarders_with_zero, waveform_start_frame)
+                waveform_start_segment_idx -= 1
+                waveform_start_segment_idx = max(waveform_start_segment_idx, 0)
+                assert waveform_start_segment_idx >= 0
+
+                waveform_end_segment_idx = np.searchsorted(frames_boarders_with_zero, waveform_end_frame, side='right')
+                assert waveform_end_segment_idx < len(frames_boarders_with_zero)
+
+                start_segment_waveform_num = frames_boarders_with_zero[waveform_start_segment_idx]
+                assert start_segment_waveform_num <= waveform_start_frame
+
+                end_segment_waveform_num = frames_boarders_with_zero[waveform_end_segment_idx]
+                assert end_segment_waveform_num >= waveform_end_frame
+
+                frames_boarders = frames_boarders_with_zero[waveform_start_segment_idx:(waveform_end_segment_idx+1)]
+                frames_boarders = frames_boarders - start_segment_waveform_num
+                assert frames_boarders[0] == 0
+                frames_boarders = frames_boarders[1:] # сut off leading zero
+                assert len(frames_boarders) > 1
+
+                waveform = waveform[start_segment_waveform_num:end_segment_waveform_num]
+
+            item_text = " ".join(words)
+            text_for_item = bos_token + item_text + eos_token
+
 
             tokenizer_input.append(text_for_item)
 

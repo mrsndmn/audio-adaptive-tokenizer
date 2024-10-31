@@ -190,7 +190,7 @@ if __name__ == '__main__':
 
     logger.info("load language model")
 
-    model, tokenizer = build_model(train_config, from_pretrained="data/models/mischievous-spider-106/last", device=device)
+    model, tokenizer = build_model(train_config, from_pretrained="data/models/vacant-mummy-116/last", device=device)
 
     logger.info("model was loaded")
 

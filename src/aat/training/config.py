@@ -65,6 +65,7 @@ class TrainConfig(BaseExperiment):
     few_train_samples: Optional[int] = 100
     few_val_samples: int = 1
     dataloader_num_workers: int = 5
+    n_words: Optional[int] = None
     # dataloader_num_workers = 0
 
     train_dataset_path: str
@@ -107,6 +108,7 @@ def overfit_one_batch_train_config():
         few_train_samples = 300,
         few_val_samples = 1,
         dataloader_num_workers = 0,
+        n_words=5,
 
         train_dataset_path = "data/libris_with_segments_1_shard.dataset",
         validation_dataset_path = "data/libris_with_segments_valid.dataset",
@@ -143,6 +145,7 @@ def full_unfreeze_train_config():
         few_train_samples = None,
         few_val_samples = 100,
         dataloader_num_workers = 10,
+        n_words=None,
 
         train_dataset_path = "data/libris_with_segments_shard_1-4.dataset/",
         validation_dataset_path = "data/libris_with_segments_valid.dataset",
