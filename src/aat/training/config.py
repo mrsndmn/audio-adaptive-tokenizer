@@ -18,6 +18,10 @@ class SegmentProjectionEnum(str, Enum):
     mean = "mean"
     linear = "linear"
 
+class SegmentationType(str, Enum):
+    uniform  = "uniform"
+    adaptive = "adaptive"
+
 
 class BaseExperiment(BaseModel):
     model_config = ConfigDict(extra="forbid")
@@ -57,9 +61,14 @@ class TrainConfig(BaseExperiment):
     # Model
     audio_encoder_pretrained_model: str = "facebook/hubert-large-ls960-ft"
     lm_pretrained_model: str = "HuggingFaceTB/SmolLM-135M-Instruct"
+    from_pretrained: Optional[str]
 
     optim_lm: bool = True
     optim_audio_encoder: bool = False
+
+    # Segmentation
+    segmentation: SegmentationType
+    uniform_segmentation_frames_per_segment: Optional[int]
 
     # Data
     few_train_samples: Optional[int] = 100
@@ -99,10 +108,14 @@ def overfit_one_batch_train_config():
         # Model
         audio_encoder_pretrained_model = "facebook/hubert-large-ls960-ft",
         lm_pretrained_model = "HuggingFaceTB/SmolLM-135M-Instruct",
-        segment_projection = SegmentProjectionEnum.linear,
+        from_pretrained = None,
 
         optim_lm = True,
         optim_audio_encoder = False,
+
+        segment_projection = SegmentProjectionEnum.mean,
+        segmentation = SegmentationType.uniform,
+        uniform_segmentation_frames_per_segment = 400,
 
         # Data
         few_train_samples = 300,
@@ -135,11 +148,14 @@ def full_unfreeze_train_config():
         # Model
         audio_encoder_pretrained_model = "facebook/hubert-large-ls960-ft",
         lm_pretrained_model = "HuggingFaceTB/SmolLM-135M-Instruct",
-
-        segment_projection = SegmentProjectionEnum.mean,
+        from_pretrained = "data/models/sinister-threshold-122/last",
 
         optim_lm = True,
         optim_audio_encoder = False,
+
+        segment_projection = SegmentProjectionEnum.mean,
+        segmentation = SegmentationType.uniform,
+        uniform_segmentation_frames_per_segment = 1600,
 
         # Data
         few_train_samples = None,

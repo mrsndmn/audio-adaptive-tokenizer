@@ -5,13 +5,16 @@ import torch
 
 from aat.tokenizer import AdaptiveAudioAmplitudeTokenizer
 from aat.audio import AudioWaveform
+from aat.training.config import TrainConfig, SegmentationType
 
 import random
 
 class TokenizedAudioWaveformCollator():
 
-    def __init__(self, audio_tokenizer: AdaptiveAudioAmplitudeTokenizer, build_text_tokenizer: Callable, sampling_rate: int, max_segment_waveform_frames: int, n_words=None, noise_augmentation: bool = True):
+    def __init__(self, train_config: TrainConfig, audio_tokenizer: AdaptiveAudioAmplitudeTokenizer, build_text_tokenizer: Callable, sampling_rate: int, max_segment_waveform_frames: int, n_words=None, noise_augmentation: bool = True):
 
+
+        self.train_config = train_config
         self.sampling_rate = sampling_rate
 
         self.n_words = n_words
@@ -64,12 +67,24 @@ class TokenizedAudioWaveformCollator():
 
         for i, item in enumerate(items):
             waveform = np.array(item['audio']['array'])
+            waveform_num_frames = waveform.shape[-1]
 
             if self.noise_augmentation:
-                waveform += np.random.rand(waveform.shape[-1]) * 0.0003
+                waveform += np.random.rand(waveform_num_frames) * random.randint(1, 50) / 1000
 
-            frames_boarders_raw = np.array(item['segment_frames'])
-            frames_boarders = frames_boarders_raw.cumsum()
+            if self.train_config.segmentation == SegmentationType.uniform:
+                num_segments = waveform_num_frames // self.train_config.uniform_segmentation_frames_per_segment
+                segments_list = [ self.train_config.uniform_segmentation_frames_per_segment ] * num_segments
+                segments_list.append(waveform_num_frames -  sum(segments_list))
+                frames_boarders_raw = np.array(segments_list)
+                frames_boarders = frames_boarders_raw.cumsum()
+            elif self.train_config.segmentation == SegmentationType.uniform:
+                frames_boarders_raw = np.array(item['segment_frames'])
+                frames_boarders = frames_boarders_raw.cumsum()
+            else:
+                raise ValueError(f"Unhandled seglent projection type: {self.train_config.segmentation}")
+
+            assert frames_boarders_raw.sum() == waveform_num_frames
 
             words = item['words']
 

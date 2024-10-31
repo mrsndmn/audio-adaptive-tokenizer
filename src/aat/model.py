@@ -3,52 +3,36 @@ import torch
 import torch.nn as nn
 import torch.nn.functional as F
 
-from speechtokenizer import SpeechTokenizer
-
-from transformers import BertModel
+from aat.training.config import SegmentProjectionEnum
 
 class AudioEmbeddingsPooling(nn.Module):
-    def __init__(self, bert_model):
+    def __init__(self, embedding_dim=512, nhead=16):
         super().__init__()
 
-        self.l_in = nn.Linear(576, bert_model.embeddings.word_embeddings.embedding_dim)
-        self.bert = bert_model
-        self.l_out = nn.Linear(bert_model.embeddings.word_embeddings.embedding_dim, 576)
+        self.l_in = nn.Linear(576, embedding_dim)
+
+        self.transformer_encoder = nn.TransformerEncoderLayer(
+            d_model=embedding_dim,
+            nhead=nhead,
+            batch_first=True,
+            norm_first=False
+        )
+
+        self.l_out = nn.Linear(embedding_dim, 576)
 
         self.scale = nn.Parameter(torch.tensor([1.0]))
 
     def forward(self, inputs_embeds, encoder_attention_mask):
 
         projected_inputs = self.l_in(inputs_embeds)
-        bert_outputs = self.bert(
-            inputs_embeds=projected_inputs,
-            encoder_attention_mask=encoder_attention_mask,
+        bert_outputs = self.transformer_encoder(
+            src=projected_inputs,
+            src_key_padding_mask=encoder_attention_mask,
         )
         pooler_output = self.l_out(bert_outputs.pooler_output)
         pooler_output = F.normalize(pooler_output, dim=-1) * self.scale
 
         return pooler_output
-
-# todo
-# DIM = EMB_DIM
-# DUBLICATE_FACTOR = 256
-# NUM_HEADS = 4
-# class VisualToGPTMapping(nn.Module):
-#     def __init__(self, visual_emb_dim, gpt_emb_dim, num_gpt_embs, num_heads):
-#         super(VisualToGPTMapping, self).__init__()
-#         self.linear = nn.Linear(visual_emb_dim, gpt_emb_dim)
-#         self.transformer_layer = nn.TransformerEncoderLayer(
-#             d_model=visual_emb_dim,
-#             nhead=num_heads,
-#             batch_first=True,
-#             norm_first=False
-#         )
-#         self.pool_linear = nn.Linear(256, DUBLICATE_FACTOR, bias=False)
-
-#     def forward(self, visual_embs):
-#         out = self.transformer_layer(visual_embs)
-#         out = self.linear(out)
-#         return out
 
 
 class TokenizedSpeechLM(nn.Module):
@@ -56,30 +40,29 @@ class TokenizedSpeechLM(nn.Module):
     start_audio_token_id = 0
     end_audio_token_id = 1
 
-    def __init__(self, audio_encoder, lm_decoder):
+    def __init__(self, audio_encoder, lm_decoder, projection_type: SegmentProjectionEnum):
         super().__init__()
 
         self.audio_encoder = audio_encoder
-        if isinstance(audio_encoder, SpeechTokenizer):
-            self.embeddings_count = audio_encoder.quantizer.bins + 1
-            self.speech_tokenizer_embeddings = nn.Embedding(self.embeddings_count, lm_decoder.config.hidden_size)
 
-            self.projection = nn.Sequential(
-                nn.Identity()
-            )
+        self.embeddings_count = audio_encoder.quantizer.bins + 1
+        self.speech_tokenizer_embeddings = nn.Embedding(self.embeddings_count, lm_decoder.config.hidden_size)
 
-            bert_model = BertModel.from_pretrained("bert-base-uncased")
-            self.audio_embeddings_pooling = AudioEmbeddingsPooling(bert_model)
+        self.projection = nn.Sequential(
+            nn.Identity()
+        )
 
-            self.speech_tokenizer_projection = nn.Linear(lm_decoder.config.hidden_size * 13, lm_decoder.config.hidden_size)
+        if projection_type == SegmentProjectionEnum.bert:
+            self.audio_embeddings_pooling = AudioEmbeddingsPooling()
+        elif projection_type == SegmentProjectionEnum.linear:
+            WAV_TOKENIZER_CODES_LENGTH_FOR_LONGEST_AUDIO_SEGMENT = 13
+            # assert train_config.max_segment_waveform_frames == 4000, "WAV_TOKENIZER_CODES_LENGTH_FOR_LONGEST_AUDIO_SEGMENT relies on that"
+            self.speech_tokenizer_projection = nn.Linear(lm_decoder.config.hidden_size * WAV_TOKENIZER_CODES_LENGTH_FOR_LONGEST_AUDIO_SEGMENT, lm_decoder.config.hidden_size)
+        elif projection_type == SegmentProjectionEnum.mean:
+            # no special parameters
+            pass
         else:
-            # self.hubert = hubert # todo but required only for audio embeddings
-            self.projection = nn.Sequential(
-                # nn.Linear(768, 768*2),
-                # nn.GELU(),
-                nn.Linear(1024, lm_decoder.config.hidden_size),
-                # nn.LayerNorm(lm_decoder.config.hidden_size),
-            )
+            raise ValueError("Unhandled projection type:")
 
         self.audio_tokens_embeddings = nn.Embedding(2, lm_decoder.config.hidden_size)
         self.lm_decoder = lm_decoder
@@ -94,8 +77,7 @@ class TokenizedSpeechLM(nn.Module):
 
         nn.init.normal_(self.audio_tokens_embeddings.weight, mean=0, std=std)
 
-        if hasattr(self, 'speech_tokenizer_embeddings'):
-            nn.init.normal_(self.speech_tokenizer_embeddings.weight, mean=0, std=std)
+        nn.init.normal_(self.speech_tokenizer_embeddings.weight, mean=0, std=std)
 
         if hasattr(self, 'audio_embeddings_pooling'):
             nn.init.normal_(self.audio_embeddings_pooling.l_in.weight, mean=0, std=std)
@@ -202,10 +184,10 @@ class TokenizedSpeechLM(nn.Module):
         return
 
     @classmethod
-    def from_pretrained(cls, audio_encoder, lm_model, model_id: str):
+    def from_pretrained(cls, audio_encoder, lm_model, projection_type, model_id: str):
         print("load TokenizedSpeechLM from", model_id)
 
-        model = cls(audio_encoder, lm_model)
+        model = cls(audio_encoder, lm_model, projection_type=projection_type)
 
         projection_path = os.path.join(model_id, "projection.pt")
 

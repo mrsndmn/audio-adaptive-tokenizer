@@ -31,11 +31,14 @@ def build_collate_fn(train_config: TrainConfig, validation=False):
         return build_tokenizer(train_config)
 
     n_words = None if validation else train_config.n_words
+    noise_augmentation = False if validation else True
 
     return TokenizedAudioWaveformCollator(
+        train_config,
         audio_tokenizer,
         build_text_tokenizer,
         n_words=n_words,
+        noise_augmentation=noise_augmentation,
         sampling_rate=train_config.sampling_rate,
         max_segment_waveform_frames=train_config.max_segment_waveform_frames,
     )

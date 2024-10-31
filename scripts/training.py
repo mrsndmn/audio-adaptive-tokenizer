@@ -146,10 +146,10 @@ def build_model(train_config: TrainConfig, from_pretrained=None, device=None):
     if from_pretrained is not None:
         lm_decoder = build_lm_decoder(train_config, from_pretrained=from_pretrained, device=device)
 
-        model = TokenizedSpeechLM.from_pretrained(audio_encoder, lm_decoder, from_pretrained)
+        model = TokenizedSpeechLM.from_pretrained(audio_encoder, lm_decoder, projection_type=train_config.segment_projection, model_id=from_pretrained)
     else:
         lm_decoder = build_lm_decoder(train_config, from_pretrained=train_config.lm_pretrained_model, device=device)
-        model = TokenizedSpeechLM(audio_encoder, lm_decoder)
+        model = TokenizedSpeechLM(audio_encoder, lm_decoder, projection_type=train_config.segment_projection)
 
         model.reinitialize_weights()
 
@@ -190,7 +190,7 @@ if __name__ == '__main__':
 
     logger.info("load language model")
 
-    model, tokenizer = build_model(train_config, from_pretrained="data/models/uncanny-sorcery-120/last", device=device)
+    model, tokenizer = build_model(train_config, from_pretrained=train_config.from_pretrained, device=device)
 
     logger.info("model was loaded")
 

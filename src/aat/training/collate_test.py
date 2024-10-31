@@ -2,6 +2,7 @@ import torch
 
 from aat.training.collate import TokenizedAudioWaveformCollator
 from aat.tokenizer import AdaptiveAudioAmplitudeTokenizer
+from aat.training.config import overfit_one_batch_train_config
 
 import numpy as np
 from transformers import AutoTokenizer
@@ -13,9 +14,13 @@ def test_collate():
         return text_tokenizer
 
     audio_tokenizer = AdaptiveAudioAmplitudeTokenizer()
+    train_config = overfit_one_batch_train_config()
 
     sampling_rate = 16000
-    collator = TokenizedAudioWaveformCollator(audio_tokenizer, build_text_tokenizer, sampling_rate=sampling_rate, max_segment_waveform_frames=4000)
+    collator = TokenizedAudioWaveformCollator(
+        train_config,
+        audio_tokenizer,
+        build_text_tokenizer, sampling_rate=sampling_rate, max_segment_waveform_frames=4000)
 
     collator_items = [
         {
