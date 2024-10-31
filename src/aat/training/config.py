@@ -136,7 +136,7 @@ def full_unfreeze_train_config():
         audio_encoder_pretrained_model = "facebook/hubert-large-ls960-ft",
         lm_pretrained_model = "HuggingFaceTB/SmolLM-135M-Instruct",
 
-        segment_projection = SegmentProjectionEnum.linear,
+        segment_projection = SegmentProjectionEnum.mean,
 
         optim_lm = True,
         optim_audio_encoder = False,
@@ -145,7 +145,7 @@ def full_unfreeze_train_config():
         few_train_samples = None,
         few_val_samples = 100,
         dataloader_num_workers = 10,
-        n_words=None,
+        n_words=100,
 
         train_dataset_path = "data/libris_with_segments_shard_1-4.dataset/",
         validation_dataset_path = "data/libris_with_segments_valid.dataset",

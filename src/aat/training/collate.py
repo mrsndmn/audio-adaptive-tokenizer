@@ -58,6 +58,10 @@ class TokenizedAudioWaveformCollator():
         audio_segments_waveforms = []
         segments_max_frame_len = []
 
+        n_words = None
+        if self.n_words is not None:
+            n_words = random.randint(5, self.n_words)
+
         for i, item in enumerate(items):
             waveform = np.array(item['audio']['array'])
 
@@ -74,9 +78,9 @@ class TokenizedAudioWaveformCollator():
             waveform_start_frame = 0
             waveform_end_frame = waveform.shape[-1]
 
-            if self.n_words is not None and len(words) > self.n_words:
-                word_start_idx = random.randint(0, len(words)-self.n_words)
-                word_end_idx = word_start_idx + self.n_words
+            if n_words is not None and len(words) > n_words:
+                word_start_idx = random.randint(0, len(words)-n_words)
+                word_end_idx = word_start_idx + n_words
                 words = words[word_start_idx:word_end_idx]
 
                 waveform_start_frame = int(item['word_start'][word_start_idx] * self.sampling_rate)
