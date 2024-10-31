@@ -67,10 +67,17 @@ class TokenizedAudioWaveformCollator():
 
         for i, item in enumerate(items):
             waveform = np.array(item['audio']['array'])
-            waveform_num_frames = waveform.shape[-1]
 
             if self.noise_augmentation:
-                waveform += np.random.rand(waveform_num_frames) * random.randint(1, 50) / 1000
+                waveform += np.random.rand(waveform.shape[-1]) * random.randint(1, 50) / 1000
+
+            waveform_offset = 0
+            if self.train_config.segment_boarders_noize:
+                assert self.train_config.segmentation == SegmentationType.uniform, 'uniform segmentaion'
+                waveform_offset = random.randint(0, int(self.train_config.uniform_segmentation_frames_per_segment // 2))
+                waveform = waveform[waveform_offset:]
+
+            waveform_num_frames = waveform.shape[-1]
 
             if self.train_config.segmentation == SegmentationType.uniform:
                 num_segments = waveform_num_frames // self.train_config.uniform_segmentation_frames_per_segment
@@ -99,7 +106,7 @@ class TokenizedAudioWaveformCollator():
                 words = words[word_start_idx:word_end_idx]
 
                 waveform_start_frame = int(item['word_start'][word_start_idx] * self.sampling_rate)
-                waveform_end_frame   = int(item['word_end'][word_end_idx-1] * self.sampling_rate)
+                waveform_end_frame   = int(item['word_end'][word_end_idx-1] * self.sampling_rate) - waveform_offset
 
                 frames_boarders_with_zero = np.insert(frames_boarders, 0, [ 0 ])
 

@@ -15,7 +15,7 @@ import datasets
 from torch.optim import Adam
 from torch.utils.data import DataLoader
 import transformers
-from transformers import AutoTokenizer, LlamaForCausalLM
+from transformers import AutoTokenizer, LlamaForCausalLM, HubertModel
 
 import accelerate
 
@@ -26,7 +26,7 @@ from speechtokenizer import SpeechTokenizer
 
 from aat.tokenizer import AdaptiveAudioAmplitudeTokenizer
 
-from aat.training.config import TrainConfig, overfit_one_batch_train_config, full_unfreeze_train_config
+from aat.training.config import TrainConfig, overfit_one_batch_train_config, full_unfreeze_train_config, AudioEncoderType
 from aat.training.validate import val_loop
 from aat.training.train import train_loop
 from aat.training.dataloaders import build_dataloaders
@@ -84,6 +84,10 @@ def train(
     last_validation_wer=0.0
 
     for epoch in range(train_config.num_epochs):
+        if train_config.unfreeze_lm_at_epoch is not None and epoch == train_config.unfreeze_lm_at_epoch:
+            logger.info("Unfreeze lm decoder")
+            unfreeze_model(model.lm_decoder)
+
         train_loop(accelerator, train_config, model, optimizer, optimizer_lr_scheduler, train_dataloader, epoch=epoch, criterion=criterion, last_validation_wer=last_validation_wer, device=device)
 
         if epoch % train_config.evaluate_every_epoch_mod == 0:
@@ -125,10 +129,14 @@ def build_lm_decoder(train_config: TrainConfig, from_pretrained=None, device=Non
 
 def build_audio_encoder(train_config: TrainConfig):
 
-    config_path = 'data/speechtokenizer/config.json'
-    ckpt_path = 'data/speechtokenizer/ckpt.dev'
-    model = SpeechTokenizer.load_from_checkpoint(config_path, ckpt_path)
-    model.eval()
+    if train_config.audio_encoder_type == AudioEncoderType.speechTokenizer:
+        config_path = 'data/speechtokenizer/config.json'
+        ckpt_path = 'data/speechtokenizer/ckpt.dev'
+        model = SpeechTokenizer.load_from_checkpoint(config_path, ckpt_path)
+        model.eval()
+    else:
+        model = HubertModel.from_pretrained("facebook/hubert-large-ls960-ft", mask_time_prob=0.0, torch_dtype=torch.float16, attn_implementation="flash_attention_2")
+        model.eval()
 
     return model
 
@@ -149,7 +157,7 @@ def build_model(train_config: TrainConfig, from_pretrained=None, device=None):
         model = TokenizedSpeechLM.from_pretrained(audio_encoder, lm_decoder, projection_type=train_config.segment_projection, model_id=from_pretrained)
     else:
         lm_decoder = build_lm_decoder(train_config, from_pretrained=train_config.lm_pretrained_model, device=device)
-        model = TokenizedSpeechLM(audio_encoder, lm_decoder, projection_type=train_config.segment_projection)
+        model = TokenizedSpeechLM(audio_encoder, lm_decoder, projection_type=train_config.segment_projection, audio_encoder_type=train_config.audio_encoder_type)
 
         model.reinitialize_weights()
 
@@ -188,7 +196,7 @@ if __name__ == '__main__':
     device = train_config.nn_device
     logger.info(f"device {device}")
 
-    logger.info("load language model")
+    logger.info("loading language model")
 
     model, tokenizer = build_model(train_config, from_pretrained=train_config.from_pretrained, device=device)
 

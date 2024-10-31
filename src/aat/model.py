@@ -3,7 +3,7 @@ import torch
 import torch.nn as nn
 import torch.nn.functional as F
 
-from aat.training.config import SegmentProjectionEnum
+from aat.training.config import SegmentProjectionEnum, AudioEncoderType
 
 class AudioEmbeddingsPooling(nn.Module):
     def __init__(self, embedding_dim=512, nhead=16):
@@ -42,24 +42,28 @@ class TokenizedSpeechLM(nn.Module):
     start_audio_token_id = 0
     end_audio_token_id = 1
 
-    def __init__(self, audio_encoder, lm_decoder, projection_type: SegmentProjectionEnum):
+    def __init__(self, audio_encoder, lm_decoder, projection_type: SegmentProjectionEnum, audio_encoder_type: AudioEncoderType):
         super().__init__()
+
+        self.audio_encoder_type = audio_encoder_type
 
         self.audio_encoder = audio_encoder
 
-        self.embeddings_count = audio_encoder.quantizer.bins + 1
-        self.speech_tokenizer_embeddings = nn.Embedding(self.embeddings_count, lm_decoder.config.hidden_size)
-
-        self.projection = nn.Sequential(
-            nn.Identity()
-        )
+        # Используется только для SpeechTokenizer, чтобы получить векторные представления из дискретных кодов
+        if audio_encoder_type == AudioEncoderType.speechTokenizer:
+            self.embeddings_count = audio_encoder.quantizer.bins + 1
+            self.audio_encoder_embeddings = nn.Embedding(self.embeddings_count, lm_decoder.config.hidden_size)
 
         if projection_type == SegmentProjectionEnum.transformer_encoder:
             self.audio_embeddings_pooling = AudioEmbeddingsPooling()
         elif projection_type == SegmentProjectionEnum.linear:
             WAV_TOKENIZER_CODES_LENGTH_FOR_LONGEST_AUDIO_SEGMENT = 13
+            WAV_TOKENIZER_CODES_LENGTH_FOR_LONGEST_AUDIO_SEGMENT = 5 # max_segment_waveform_frames == 1600
+            # linear_features = lm_decoder.config.hidden_size * WAV_TOKENIZER_CODES_LENGTH_FOR_LONGEST_AUDIO_SEGMENT
+            HUBERT_EMBEDDINGS_LENGTH_FOR_LONGEST_AUDIO_SEGMENT = 5 # max_segment_waveform_frames == 1600
+            linear_features = 4096
             # assert train_config.max_segment_waveform_frames == 4000, "WAV_TOKENIZER_CODES_LENGTH_FOR_LONGEST_AUDIO_SEGMENT relies on that"
-            self.speech_tokenizer_projection = nn.Linear(lm_decoder.config.hidden_size * WAV_TOKENIZER_CODES_LENGTH_FOR_LONGEST_AUDIO_SEGMENT, lm_decoder.config.hidden_size)
+            self.audio_encoder_projection = nn.Linear(linear_features, lm_decoder.config.hidden_size)
         elif projection_type == SegmentProjectionEnum.mean:
             # no special parameters
             pass
@@ -71,27 +75,76 @@ class TokenizedSpeechLM(nn.Module):
 
         return
 
-    def reinitialize_weights(self, std=0.02):
-        for module in self.projection:
-            if isinstance(module, nn.Linear):
-                nn.init.normal_(module.weight, mean=0, std=std)
-                nn.init.constant_(module.bias, 0)
+    def encode_audio(self, waveform, waveforms_mask):
+        """Encodes waveform to hidden dimension
 
+        Args:
+            waveform (Tensor) [ bs * segments_count, max_segment_waveform_frames ] : Segments waveforms
+            waveforms_mask (Tensor) [ bs * segments_count, max_segment_waveform_frames ]: Padding mask for segments
+
+        """
+        if self.audio_encoder_type == AudioEncoderType.speechTokenizer:
+            with torch.no_grad():
+                audio_codes = self.audio_encoder.encode(
+                    waveform.unsqueeze(1),
+                    n_q=1,
+                )
+
+            # [ bs * segments_count, seq_len ]
+            audio_codes = audio_codes.squeeze(0)
+
+            # [ bs * segments_count, max_segment_waveform_frames ]
+            compression_factor = waveform.shape[-1] / audio_codes.shape[-1]
+            compressed_seq_lengths = torch.round(waveforms_mask.sum(dim=-1) / compression_factor).to(torch.long)
+
+            assert (compressed_seq_lengths != 0).any()
+
+            # [ bs * segments_count, seq_len ]
+            embeddings_attention_mask = torch.arange(audio_codes.shape[-1], dtype=torch.long, device=waveforms_mask.device).unsqueeze(0).repeat(audio_codes.shape[0], 1)
+            embeddings_attention_mask = (embeddings_attention_mask < compressed_seq_lengths.unsqueeze(1)).long()
+
+            audio_hidden_states = self.audio_encoder_embeddings(audio_codes)
+            audio_hidden_states[~embeddings_attention_mask] = 0
+
+        elif self.audio_encoder_type == AudioEncoderType.hubert:
+            with torch.no_grad():
+                audio_hidden_states = self.audio_encoder(
+                    input_values=waveform.half(),
+                    attention_mask=waveforms_mask,
+                ).last_hidden_state
+
+                audio_hidden_states = audio_hidden_states.to(torch.float32)
+
+            embeddings_attention_mask = self.audio_encoder._get_feature_vector_attention_mask(audio_hidden_states.shape[1], waveforms_mask)
+
+        else:
+            raise NotImplementedError
+
+        assert embeddings_attention_mask.shape[1] == audio_hidden_states.shape[1]
+        assert embeddings_attention_mask.shape[0] == audio_hidden_states.shape[0]
+
+        # audio_hidden_states ~ [ bs * segments_count, seq_len, embedding_dim ]
+        # embeddings_attention_mask ~ [ bs * segments_count, seq_len ]
+        return audio_hidden_states, embeddings_attention_mask
+
+
+    def reinitialize_weights(self, std=0.02):
         nn.init.normal_(self.audio_tokens_embeddings.weight, mean=0, std=std)
 
-        nn.init.normal_(self.speech_tokenizer_embeddings.weight, mean=0, std=std)
+        if hasattr(self, 'audio_encoder_embeddings'):
+            nn.init.normal_(self.audio_encoder_embeddings.weight, mean=0, std=std)
 
         if hasattr(self, 'audio_embeddings_pooling'):
             nn.init.normal_(self.audio_embeddings_pooling.l_in.weight, mean=0, std=std)
             nn.init.normal_(self.audio_embeddings_pooling.l_out.weight, mean=0, std=std)
 
-        if hasattr(self, 'speech_tokenizer_projection'):
-            nn.init.normal_(self.speech_tokenizer_projection.weight, mean=0, std=std)
+        if hasattr(self, 'audio_encoder_projection'):
+            nn.init.normal_(self.audio_encoder_projection.weight, mean=0, std=std)
 
         return
 
     def prepare_audio_embeddings(self, audio_embeds):
-        audio_embeds = self.projection(audio_embeds)
+        # no op
         return audio_embeds
 
     def forward(self, input_ids=None, inputs_embeds=None, attention_mask=None, output_attentions=None):
@@ -168,17 +221,16 @@ class TokenizedSpeechLM(nn.Module):
 
         os.makedirs(save_directory, exist_ok=True)
 
-        torch.save(self.projection.state_dict(), os.path.join(save_directory, "projection.pt"))
         torch.save(self.audio_tokens_embeddings.state_dict(), os.path.join(save_directory, "audio_tokens_embeddings.pt"))
 
-        if hasattr(self, 'speech_tokenizer_embeddings'):
-            torch.save(self.speech_tokenizer_embeddings.state_dict(), os.path.join(save_directory, "speech_tokenizer_embeddings.pt"))
+        if hasattr(self, 'audio_encoder_embeddings'):
+            torch.save(self.audio_encoder_embeddings.state_dict(), os.path.join(save_directory, "audio_encoder_embeddings.pt"))
 
         if hasattr(self, 'audio_embeddings_pooling'):
             torch.save(self.audio_embeddings_pooling.state_dict(), os.path.join(save_directory, "audio_embeddings_pooling.pt"))
 
-        if hasattr(self, 'speech_tokenizer_projection'):
-            torch.save(self.speech_tokenizer_projection.state_dict(), os.path.join(save_directory, "speech_tokenizer_projection.pt"))
+        if hasattr(self, 'audio_encoder_projection'):
+            torch.save(self.audio_encoder_projection.state_dict(), os.path.join(save_directory, "audio_encoder_projection.pt"))
 
         self.lm_decoder.save_pretrained(save_directory)
         # self.config.save_pretrained(save_directory)
@@ -191,28 +243,23 @@ class TokenizedSpeechLM(nn.Module):
 
         model = cls(audio_encoder, lm_model, projection_type=projection_type)
 
-        projection_path = os.path.join(model_id, "projection.pt")
-
-        projection_state = torch.load(projection_path, map_location=torch.device('cpu'))
-        model.projection.load_state_dict(projection_state)
-
         audio_tokens_embeddings_path = os.path.join(model_id, "audio_tokens_embeddings.pt")
         audio_tokens_embeddings_state = torch.load(audio_tokens_embeddings_path, map_location=torch.device('cpu'))
         model.audio_tokens_embeddings.load_state_dict(audio_tokens_embeddings_state)
 
-        if hasattr(model, 'speech_tokenizer_embeddings'):
-            speech_tokenizer_embeddings_state_dict_path = os.path.join(model_id, "speech_tokenizer_embeddings.pt")
-            speech_tokenizer_embeddings_state_dict = torch.load(speech_tokenizer_embeddings_state_dict_path, map_location=torch.device('cpu'))
-            model.speech_tokenizer_embeddings.load_state_dict(speech_tokenizer_embeddings_state_dict)
+        if hasattr(model, 'audio_encoder_embeddings'):
+            audio_encoder_embeddings_state_dict_path = os.path.join(model_id, "audio_encoder_embeddings.pt")
+            audio_encoder_embeddings_state_dict = torch.load(audio_encoder_embeddings_state_dict_path, map_location=torch.device('cpu'))
+            model.audio_encoder_embeddings.load_state_dict(audio_encoder_embeddings_state_dict)
 
         if hasattr(model, 'audio_embeddings_pooling'):
             audio_embeddings_pooling_state_dict_path = os.path.join(model_id, "audio_embeddings_pooling.pt")
             audio_embeddings_pooling_state_dict = torch.load(audio_embeddings_pooling_state_dict_path, map_location=torch.device('cpu'))
             model.audio_embeddings_pooling.load_state_dict(audio_embeddings_pooling_state_dict)
 
-        if hasattr(model, 'speech_tokenizer_projection'):
-            speech_tokenizer_projection_state_dict_path = os.path.join(model_id, "speech_tokenizer_projection.pt")
-            speech_tokenizer_projection_state_dict = torch.load(speech_tokenizer_projection_state_dict_path, map_location=torch.device('cpu'))
-            model.speech_tokenizer_projection.load_state_dict(speech_tokenizer_projection_state_dict)
+        if hasattr(model, 'audio_encoder_projection'):
+            audio_encoder_projection_state_dict_path = os.path.join(model_id, "audio_encoder_projection.pt")
+            audio_encoder_projection_state_dict = torch.load(audio_encoder_projection_state_dict_path, map_location=torch.device('cpu'))
+            model.audio_encoder_projection.load_state_dict(audio_encoder_projection_state_dict)
 
         return model
