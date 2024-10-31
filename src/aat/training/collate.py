@@ -88,7 +88,10 @@ class TokenizedAudioWaveformCollator():
             if self.train_config.segmentation == SegmentationType.uniform:
                 num_segments = waveform_num_frames // self.train_config.uniform_segmentation_frames_per_segment
                 segments_list = [ self.train_config.uniform_segmentation_frames_per_segment ] * num_segments
-                segments_list.append(waveform_num_frames -  sum(segments_list))
+
+                if waveform_num_frames % self.train_config.uniform_segmentation_frames_per_segment > 0:
+                    segments_list.append(waveform_num_frames -  sum(segments_list))
+
                 frames_boarders_raw = np.array(segments_list)
                 frames_boarders = frames_boarders_raw.cumsum()
             elif self.train_config.segmentation == SegmentationType.uniform:
@@ -207,7 +210,8 @@ class TokenizedAudioWaveformCollator():
                     continue
 
                 segment_waveform = result['audio_input_values'][batch_i, prev_segment_boarder:segment_boarder]
-                assert segment_waveform.shape[-1] > 0
+                assert segment_waveform.shape[-1] > 0, f"{prev_segment_boarder}:{segment_boarder}, {segments_boarders_padded[batch_i]}"
+
                 segments_for_padding.append(segment_waveform.numpy())
                 prev_segment_boarder = segment_boarder
 
