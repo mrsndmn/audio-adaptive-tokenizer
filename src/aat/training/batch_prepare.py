@@ -8,9 +8,35 @@ from tqdm.auto import tqdm
 import accelerate
 
 from aat.model import TokenizedSpeechLM
-from aat.training.config import TrainConfig, SegmentProjectionEnum
+from aat.training.config import TrainConfig, SegmentProjectionEnum, SegmentationType
 
-def _inplace_audio_encode_batch_speechtokenizer(train_config: TrainConfig, model: TokenizedSpeechLM, batch, device=None):
+def _inplace_audio_encode_batch_no_segmentation(train_config: TrainConfig, model: TokenizedSpeechLM, batch, device=None):
+
+    # [ bs, max_segment_waveform_frames ]
+    batched_waveforms = batch['waveforms'].to(device)
+    batched_waveforms_attention_mask = batch['waveforms_attention_mask'].to(device)
+
+    # audio_hidden_states ~ [ bs, seq_len, embedding_dim ]
+    # embeddings_attention_mask ~ [ bs, seq_len ]
+    audio_hidden_states, embeddings_attention_mask = model.encode_audio(batched_waveforms, batched_waveforms_attention_mask)
+
+    if train_config.segment_projection == SegmentProjectionEnum.transformer_encoder:
+        raise NotImplementedError
+    elif train_config.segment_projection == SegmentProjectionEnum.mean:
+        raise NotImplementedError
+    elif train_config.segment_projection == SegmentProjectionEnum.linear:
+        audio_hidden_states = model.audio_encoder_projection(audio_hidden_states)
+    else:
+        raise ValueError(f"unsupported segment_projection: {train_config.segment_projection}")
+
+    audio_hidden_states = model.audio_encoder_dropout(audio_hidden_states)
+
+    batch['audio_embeds_last_hidden_state'] = audio_hidden_states
+    batch['audio_embeds_attention_mask'] = embeddings_attention_mask
+
+
+def _inplace_audio_encode_batch(train_config: TrainConfig, model: TokenizedSpeechLM, batch, device=None):
+
 
     segments_boarders_padded = batch['segments_boarders_padded']
     segments_boarders_attention_mask = batch['segments_boarders_attention_mask'].to(device) # [ bs, segments_count ]
@@ -67,6 +93,8 @@ def _inplace_audio_encode_batch_speechtokenizer(train_config: TrainConfig, model
     else:
         raise ValueError(f"unsupported segment_projection: {train_config.segment_projection}")
 
+    audio_hidden_states = model.audio_encoder_dropout(audio_hidden_states)
+
     batch['audio_embeds_last_hidden_state'] = audio_hidden_states
     batch['audio_embeds_attention_mask'] = segments_boarders_attention_mask
 
@@ -74,7 +102,10 @@ def _inplace_audio_encode_batch_speechtokenizer(train_config: TrainConfig, model
 
 def prepare_model_inputs_from_batch(train_config: TrainConfig, model: TokenizedSpeechLM, batch, device=None):
 
-    _inplace_audio_encode_batch_speechtokenizer(train_config, model, batch, device=device)
+    if train_config.segmentation == SegmentationType.none:
+        _inplace_audio_encode_batch_no_segmentation(train_config, model, batch, device=device)
+    else:
+        _inplace_audio_encode_batch(train_config, model, batch, device=device)
 
     audio_embeds_last_hidden_state = batch['audio_embeds_last_hidden_state'].to(device)
     audio_embeds_attention_mask = batch['audio_embeds_attention_mask'].to(device)

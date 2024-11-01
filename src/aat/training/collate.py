@@ -17,6 +17,7 @@ class TokenizedAudioWaveformCollator():
 
     def __init__(self, train_config: TrainConfig, audio_tokenizer: AdaptiveAudioAmplitudeTokenizer, build_text_tokenizer: Callable, sampling_rate: int, max_segment_waveform_frames: int, n_words=None, noise_augmentation: bool = True):
 
+        assert self.train_config.segmentation != SegmentationType.none
 
         self.train_config = train_config
         self.sampling_rate = sampling_rate
@@ -226,4 +227,78 @@ class TokenizedAudioWaveformCollator():
         assert not result['segments_waveforms_mask'].isnan().any()
 
         return result
+
+
+
+class NoSegmentationAudioWaveformCollator():
+
+    def __init__(self, train_config: TrainConfig, build_text_tokenizer: Callable, sampling_rate: int):
+
+        self.train_config = train_config
+        self.sampling_rate = sampling_rate
+
+        self.build_text_tokenizer = build_text_tokenizer
+        self.tokenizer = self.build_text_tokenizer()
+
+        self.audio_processor = AutoProcessor.from_pretrained("facebook/hubert-large-ls960-ft")
+
+        return
+
+    def pad_waveforms(self, waveforms_padding_list: List) -> Dict:
+        assert len(waveforms_padding_list[0].shape) == 1, 'channel dim is not supported for waveform'
+        max_len = max(x.shape[-1] for x in waveforms_padding_list)
+        batch_size = len(waveforms_padding_list)
+
+        attention_mask = torch.zeros(batch_size, max_len, dtype=torch.long)
+        batched_waveform = torch.zeros(batch_size, max_len)
+
+        for i, wf in enumerate(waveforms_padding_list):
+            attention_mask[i, :wf.shape[-1]] = 1
+            batched_waveform[i, :wf.shape[-1]] = torch.from_numpy(wf)
+
+        return {
+            "input_values": batched_waveform,
+            "attention_mask": attention_mask,
+        }
+
+
+    def __call__(self, items):
+
+        tokenizer = self.tokenizer
+
+        result = dict()
+        # random select caption
+        bos_token = tokenizer.decode(tokenizer.bos_token_id)
+        eos_token = tokenizer.decode(tokenizer.eos_token_id)
+        tokenizer_input = []
+        audio_waveforms = []
+
+        for i, item in enumerate(items):
+            waveform = np.array(item['audio']['array'])
+            # noise augmentation
+            waveform += np.random.rand(waveform.shape[-1]) * random.randint(1, 50) / 1000
+
+            words = item['words']
+            item_text = " ".join(words)
+            text_for_item = bos_token + item_text + eos_token
+            tokenizer_input.append(text_for_item)
+
+            audio_waveforms.append(waveform)
+
+        tokenized_caption = tokenizer(tokenizer_input, padding=True)
+        result['input_ids'] = torch.tensor(tokenized_caption['input_ids'])
+        result['attention_mask'] = torch.tensor(tokenized_caption['attention_mask'])
+
+        result['input_ids_attention_mask'] = result['attention_mask']
+
+        segments_padded_normalized_with_mask = self.audio_processor(audio_waveforms, return_tensors="pt", sampling_rate=self.train_config.sampling_rate, padding=PaddingStrategy.LONGEST)
+
+        result['waveforms'] = segments_padded_normalized_with_mask.input_values
+        result['waveforms_attention_mask'] = segments_padded_normalized_with_mask.attention_mask
+
+        assert not result['waveforms'].isnan().any()
+        assert not result['waveforms_attention_mask'].isnan().any()
+
+        return result
+
 

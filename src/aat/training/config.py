@@ -19,6 +19,7 @@ class SegmentProjectionEnum(str, Enum):
     linear = "linear"
 
 class SegmentationType(str, Enum):
+    none  = "none"
     uniform  = "uniform"
     adaptive = "adaptive"
 
@@ -69,6 +70,7 @@ class TrainConfig(BaseExperiment):
     lm_pretrained_model: str = "HuggingFaceTB/SmolLM-135M-Instruct"
     from_pretrained: Optional[str]
 
+    lm_flash_attention: bool = False
     optim_lm: bool = True
     unfreeze_lm_at_epoch: Optional[int]
     optim_audio_encoder: bool = False
@@ -84,6 +86,8 @@ class TrainConfig(BaseExperiment):
     n_words: Optional[int] = None
     # dataloader_num_workers = 0
 
+    not_segmented_dataset: bool = False
+
     train_dataset_path: str
     validation_dataset_path: str
 
@@ -98,6 +102,9 @@ class TrainConfig(BaseExperiment):
         if self.segmentation == SegmentationType.uniform:
             if self.max_segment_waveform_frames != self.uniform_segmentation_frames_per_segment:
                 raise ValueError("For uniform segmentation `uniform_segmentation_frames_per_segment` must be equal to `max_segment_waveform_frames`")
+
+        if self.segmentation == SegmentationType.none and self.segment_boarders_noize:
+            raise ValueError("`segment_boarders_noize` is not available with `segmentation` = `SegmentationType.none`")
 
 
 def overfit_one_batch_train_config():
@@ -128,9 +135,9 @@ def overfit_one_batch_train_config():
         optim_audio_encoder = False,
 
         segment_projection = SegmentProjectionEnum.linear,
-        segmentation = SegmentationType.uniform,
-        uniform_segmentation_frames_per_segment = 1600,
-        segment_boarders_noize = True,
+        segmentation = SegmentationType.none,
+        uniform_segmentation_frames_per_segment = None,
+        segment_boarders_noize = False,
 
         # Data
         few_train_samples = 300,
@@ -146,11 +153,11 @@ def overfit_one_batch_train_config():
 def full_unfreeze_train_config():
 
     return TrainConfig(
-        num_epochs = 100,
-        train_batch_size = 25,
-        val_batch_size = 1,
-        learning_rate = 1e-4,
-        # gradient_accumulation_steps = 2
+        num_epochs = 500,
+        train_batch_size = 30,
+        val_batch_size = 10,
+        learning_rate = 1e-3,
+        gradient_accumulation_steps = 7,
 
         evaluate_every_epoch_mod = 1,
         save_model_every_epoch_mod = 1,
@@ -167,19 +174,21 @@ def full_unfreeze_train_config():
         from_pretrained = None,
 
         optim_lm = False,
-        unfreeze_lm_at_epoch = 2,
+        lm_flash_attention = False,
+        unfreeze_lm_at_epoch = None,
         optim_audio_encoder = False,
 
         segment_projection = SegmentProjectionEnum.linear,
-        segmentation = SegmentationType.uniform,
-        uniform_segmentation_frames_per_segment = 1600,
-        segment_boarders_noize = True,
+        segmentation = SegmentationType.none,
+        uniform_segmentation_frames_per_segment = None,
+        segment_boarders_noize = False,
 
         # Data
         few_train_samples = None,
         few_val_samples = 100,
         dataloader_num_workers = 10,
         n_words=50,
+        not_segmented_dataset = True,
 
         train_dataset_path = "data/libris_with_segments_shard_1-4.dataset/",
         validation_dataset_path = "data/libris_with_segments_valid.dataset",

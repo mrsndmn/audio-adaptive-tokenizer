@@ -5,9 +5,9 @@ from transformers import AutoTokenizer
 
 from torch.utils.data import DataLoader
 
-from aat.training.config import TrainConfig
+from aat.training.config import TrainConfig, SegmentationType
 from aat.tokenizer import AdaptiveAudioAmplitudeTokenizer
-from aat.training.collate import TokenizedAudioWaveformCollator
+from aat.training.collate import TokenizedAudioWaveformCollator, NoSegmentationAudioWaveformCollator
 
 
 
@@ -32,6 +32,9 @@ def build_collate_fn(train_config: TrainConfig, validation=False):
 
     n_words = None if validation else train_config.n_words
     noise_augmentation = False if validation else True
+
+    if train_config.segmentation == SegmentationType.none:
+        return NoSegmentationAudioWaveformCollator(train_config, build_text_tokenizer, sampling_rate=train_config.sampling_rate)
 
     return TokenizedAudioWaveformCollator(
         train_config,
@@ -80,13 +83,21 @@ def build_dataloaders(train_config: TrainConfig):
     # test_dataset_files = [ f'libris/train-00063-of-00064.parquet' ] # 1 shard = 1 gb of data
     # audio_dataset_val = datasets.load_dataset("nguyenvulebinh/asr-alignment", split=datasets.Split.TRAIN, data_files=test_dataset_files, streaming=False)
 
-    audio_dataset = datasets.load_from_disk(train_config.train_dataset_path)
-    # audio_dataset = audio_dataset.to_iterable_dataset()
-    audio_dataset = audio_dataset.shuffle(seed=42)
-    # audio_dataset = audio_dataset.to_iterable_dataset()
-    # audio_dataset = audio_dataset.shuffle(seed=42, buffer_size=1000)
+    if train_config.not_segmented_dataset:
+        audio_dataset = datasets.load_dataset("nguyenvulebinh/asr-alignment", 'libris')
+        audio_dataset_val = audio_dataset['valid']
+        audio_dataset =  audio_dataset['train']
+        audio_dataset = audio_dataset.shuffle(seed=42)
+    else:
+        audio_dataset = datasets.load_from_disk(train_config.train_dataset_path)
 
-    audio_dataset_val = datasets.load_from_disk(train_config.validation_dataset_path)
+
+        # audio_dataset = audio_dataset.to_iterable_dataset()
+        audio_dataset = audio_dataset.shuffle(seed=42)
+        # audio_dataset = audio_dataset.to_iterable_dataset()
+        # audio_dataset = audio_dataset.shuffle(seed=42, buffer_size=1000)
+
+        audio_dataset_val = datasets.load_from_disk(train_config.validation_dataset_path)
 
     # audio_dataset = load_dataset("nguyenvulebinh/asr-alignment", 'libris', split=datasets.Split.TRAIN, streaming=True)
     # audio_dataset.cast_column('audio', datasets.Audio(sampling_rate=train_config.sampling_rate))

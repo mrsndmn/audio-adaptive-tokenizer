@@ -49,6 +49,8 @@ class TokenizedSpeechLM(nn.Module):
 
         self.audio_encoder = audio_encoder
 
+        self.audio_embeddings_scale = nn.Parameter(torch.tensor([1.0]))
+
         # Используется только для SpeechTokenizer, чтобы получить векторные представления из дискретных кодов
         if audio_encoder_type == AudioEncoderType.speechTokenizer:
             self.embeddings_count = audio_encoder.quantizer.bins + 1
@@ -61,7 +63,8 @@ class TokenizedSpeechLM(nn.Module):
             WAV_TOKENIZER_CODES_LENGTH_FOR_LONGEST_AUDIO_SEGMENT = 5 # max_segment_waveform_frames == 1600
             # linear_features = lm_decoder.config.hidden_size * WAV_TOKENIZER_CODES_LENGTH_FOR_LONGEST_AUDIO_SEGMENT
             HUBERT_EMBEDDINGS_LENGTH_FOR_LONGEST_AUDIO_SEGMENT = 5 # max_segment_waveform_frames == 1600
-            linear_features = 4096
+            linear_features = 1024
+
             # assert train_config.max_segment_waveform_frames == 4000, "WAV_TOKENIZER_CODES_LENGTH_FOR_LONGEST_AUDIO_SEGMENT relies on that"
             self.audio_encoder_projection = nn.Linear(linear_features, lm_decoder.config.hidden_size)
         elif projection_type == SegmentProjectionEnum.mean:
@@ -69,6 +72,8 @@ class TokenizedSpeechLM(nn.Module):
             pass
         else:
             raise ValueError("Unhandled projection type:")
+
+        self.audio_encoder_dropout = nn.Dropout(p=0.1)
 
         self.audio_tokens_embeddings = nn.Embedding(2, lm_decoder.config.hidden_size)
         self.lm_decoder = lm_decoder
@@ -104,7 +109,6 @@ class TokenizedSpeechLM(nn.Module):
             embeddings_attention_mask = (embeddings_attention_mask < compressed_seq_lengths.unsqueeze(1)).long()
 
             audio_hidden_states = self.audio_encoder_embeddings(audio_codes)
-            audio_hidden_states[~embeddings_attention_mask] = 0
 
         elif self.audio_encoder_type == AudioEncoderType.hubert:
             with torch.no_grad():
@@ -120,8 +124,17 @@ class TokenizedSpeechLM(nn.Module):
         else:
             raise NotImplementedError
 
+        assert not audio_hidden_states.isnan().any()
+
+        audio_hidden_states = F.normalize(audio_hidden_states, dim=-1)
+        audio_hidden_states = audio_hidden_states * self.audio_embeddings_scale
+
+        assert not audio_hidden_states.isnan().any()
+
         assert embeddings_attention_mask.shape[1] == audio_hidden_states.shape[1]
         assert embeddings_attention_mask.shape[0] == audio_hidden_states.shape[0]
+
+        # audio_hidden_states[~embeddings_attention_mask] = 0
 
         # audio_hidden_states ~ [ bs * segments_count, seq_len, embedding_dim ]
         # embeddings_attention_mask ~ [ bs * segments_count, seq_len ]
@@ -148,6 +161,10 @@ class TokenizedSpeechLM(nn.Module):
         return audio_embeds
 
     def forward(self, input_ids=None, inputs_embeds=None, attention_mask=None, output_attentions=None):
+
+        if inputs_embeds.dtype != self.lm_decoder.dtype:
+            inputs_embeds = inputs_embeds.to(self.lm_decoder.dtype)
+
         return self.lm_decoder.forward(input_ids=input_ids, inputs_embeds=inputs_embeds, attention_mask=attention_mask, output_attentions=None)
 
     def encode_text(self, input_ids=None):
@@ -222,6 +239,7 @@ class TokenizedSpeechLM(nn.Module):
         os.makedirs(save_directory, exist_ok=True)
 
         torch.save(self.audio_tokens_embeddings.state_dict(), os.path.join(save_directory, "audio_tokens_embeddings.pt"))
+        torch.save(self.audio_embeddings_scale, os.path.join(save_directory, "audio_embeddings_scale.pt"))
 
         if hasattr(self, 'audio_encoder_embeddings'):
             torch.save(self.audio_encoder_embeddings.state_dict(), os.path.join(save_directory, "audio_encoder_embeddings.pt"))
@@ -246,6 +264,10 @@ class TokenizedSpeechLM(nn.Module):
         audio_tokens_embeddings_path = os.path.join(model_id, "audio_tokens_embeddings.pt")
         audio_tokens_embeddings_state = torch.load(audio_tokens_embeddings_path, map_location=torch.device('cpu'))
         model.audio_tokens_embeddings.load_state_dict(audio_tokens_embeddings_state)
+
+        audio_embeddings_scale_path = os.path.join(model_id, "audio_embeddings_scale.pt")
+        audio_embeddings_scale = torch.load(audio_embeddings_scale_path, map_location=torch.device('cpu'))
+        model.audio_embeddings_scale = audio_embeddings_scale
 
         if hasattr(model, 'audio_encoder_embeddings'):
             audio_encoder_embeddings_state_dict_path = os.path.join(model_id, "audio_encoder_embeddings.pt")

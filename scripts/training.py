@@ -78,8 +78,8 @@ def train(
     )
     wandb_run = accelerator.get_tracker('wandb')
 
-    # accelerator.gradient_accumulation_steps = train_config.gradient_accumulation_steps
-    # model, optimizer, train_dataloader, val_dataloader = accelerator.prepare(model, optimizer, train_dataloader, val_dataloader)
+    accelerator.gradient_accumulation_steps = train_config.gradient_accumulation_steps
+    model, optimizer, train_dataloader, val_dataloader = accelerator.prepare(model, optimizer, train_dataloader, val_dataloader)
 
     last_validation_wer=0.0
 
@@ -120,7 +120,12 @@ def unfreeze_model(model):
 def build_lm_decoder(train_config: TrainConfig, from_pretrained=None, device=None):
 
     print("from_pretrained", from_pretrained)
-    lm_decoder = LlamaForCausalLM.from_pretrained(from_pretrained)
+    kwargs = dict()
+    if train_config.lm_flash_attention:
+        kwargs['torch_dtype'] = torch.float16
+        kwargs['attn_implementation'] = "flash_attention_2"
+
+    lm_decoder = LlamaForCausalLM.from_pretrained(from_pretrained, **kwargs)
 
     lm_decoder.to(device)
 

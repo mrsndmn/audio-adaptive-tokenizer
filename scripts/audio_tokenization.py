@@ -26,7 +26,7 @@ if __name__ == '__main__':
     expected_sampling_rate = 16000
 
     audio_dataset = load_dataset("nguyenvulebinh/asr-alignment", 'libris')['train']
-    audio_dataset.cast_column('audio', datasets.Audio(sampling_rate=expected_sampling_rate))
+    audio_dataset = audio_dataset.cast_column('audio', datasets.Audio(sampling_rate=expected_sampling_rate))
 
     audio_tokenizer = AdaptiveAudioAmplitudeTokenizer()
 
