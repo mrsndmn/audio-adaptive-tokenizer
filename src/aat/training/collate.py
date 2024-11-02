@@ -13,14 +13,30 @@ import random
 
 from transformers.utils import PaddingStrategy
 
+
+PREFIXES = [
+    "The audio transcription states:",
+    "According to the audio transcript:",
+    "As per the audio transcription:",
+    "In the audio recording it is said:",
+    "Based on the audio script:",
+    "Per the audio record:",
+    "From the audio file it can be heard:",
+    "What the audio text conveys is:",
+    "Transcribed from the audio:",
+    "Listening to the recording reveals:",
+]
+
+
 class TokenizedAudioWaveformCollator():
 
-    def __init__(self, train_config: TrainConfig, audio_tokenizer: AdaptiveAudioAmplitudeTokenizer, build_text_tokenizer: Callable, sampling_rate: int, max_segment_waveform_frames: int, n_words=None, noise_augmentation: bool = True):
+    def __init__(self, train_config: TrainConfig, audio_tokenizer: AdaptiveAudioAmplitudeTokenizer, tokenizer, sampling_rate: int, max_segment_waveform_frames: int, n_words=None, noise_augmentation: bool = True):
 
-        assert self.train_config.segmentation != SegmentationType.none
 
         self.train_config = train_config
         self.sampling_rate = sampling_rate
+
+        assert self.train_config.segmentation != SegmentationType.none
 
         self.n_words = n_words
 
@@ -29,8 +45,7 @@ class TokenizedAudioWaveformCollator():
         self.noise_augmentation = noise_augmentation
 
         self.audio_tokenizer = audio_tokenizer
-        self.build_text_tokenizer = build_text_tokenizer
-        self.tokenizer = self.build_text_tokenizer()
+        self.tokenizer = tokenizer
 
         self.audio_processor = AutoProcessor.from_pretrained("facebook/hubert-large-ls960-ft")
 
@@ -143,6 +158,8 @@ class TokenizedAudioWaveformCollator():
                 waveform = waveform[start_segment_waveform_num:end_segment_waveform_num]
 
             item_text = " ".join(words)
+            if self.train_config.add_prefix:
+                item_text = random.choice(PREFIXES) + " " + item_text
             text_for_item = bos_token + item_text + eos_token
 
 
@@ -232,13 +249,12 @@ class TokenizedAudioWaveformCollator():
 
 class NoSegmentationAudioWaveformCollator():
 
-    def __init__(self, train_config: TrainConfig, build_text_tokenizer: Callable, sampling_rate: int):
+    def __init__(self, train_config: TrainConfig, tokenizer, sampling_rate: int):
 
         self.train_config = train_config
         self.sampling_rate = sampling_rate
 
-        self.build_text_tokenizer = build_text_tokenizer
-        self.tokenizer = self.build_text_tokenizer()
+        self.tokenizer = tokenizer
 
         self.audio_processor = AutoProcessor.from_pretrained("facebook/hubert-large-ls960-ft")
 
@@ -280,6 +296,8 @@ class NoSegmentationAudioWaveformCollator():
 
             words = item['words']
             item_text = " ".join(words)
+            if self.train_config.add_prefix:
+                item_text = random.choice(PREFIXES) + " " + item_text
             text_for_item = bos_token + item_text + eos_token
             tokenizer_input.append(text_for_item)
 

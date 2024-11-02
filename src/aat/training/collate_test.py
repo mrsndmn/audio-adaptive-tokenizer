@@ -9,9 +9,7 @@ from transformers import AutoTokenizer
 
 def test_collate():
 
-    def build_text_tokenizer():
-        text_tokenizer = AutoTokenizer.from_pretrained("HuggingFaceTB/SmolLM-135M-Instruct")
-        return text_tokenizer
+    text_tokenizer = AutoTokenizer.from_pretrained("HuggingFaceTB/SmolLM-135M-Instruct")
 
     audio_tokenizer = AdaptiveAudioAmplitudeTokenizer()
     train_config = overfit_one_batch_train_config()
@@ -20,7 +18,7 @@ def test_collate():
     collator = TokenizedAudioWaveformCollator(
         train_config,
         audio_tokenizer,
-        build_text_tokenizer, sampling_rate=sampling_rate, max_segment_waveform_frames=4000)
+        text_tokenizer, sampling_rate=sampling_rate, max_segment_waveform_frames=4000)
 
     collator_items = [
         {

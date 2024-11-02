@@ -62,13 +62,21 @@ class TokenizedSpeechLM(nn.Module):
             WAV_TOKENIZER_CODES_LENGTH_FOR_LONGEST_AUDIO_SEGMENT = 13
             WAV_TOKENIZER_CODES_LENGTH_FOR_LONGEST_AUDIO_SEGMENT = 5 # max_segment_waveform_frames == 1600
             # linear_features = lm_decoder.config.hidden_size * WAV_TOKENIZER_CODES_LENGTH_FOR_LONGEST_AUDIO_SEGMENT
-            HUBERT_EMBEDDINGS_LENGTH_FOR_LONGEST_AUDIO_SEGMENT = 5 # max_segment_waveform_frames == 1600
-            linear_features = 1024
+            HUBERT_EMBEDDINGS_LENGTH_FOR_LONGEST_AUDIO_SEGMENT = 24 # max_segment_waveform_frames == 1600
+            linear_features = 1024 * HUBERT_EMBEDDINGS_LENGTH_FOR_LONGEST_AUDIO_SEGMENT
+
+            self.HUBERT_EMBEDDINGS_LENGTH_FOR_LONGEST_AUDIO_SEGMENT = HUBERT_EMBEDDINGS_LENGTH_FOR_LONGEST_AUDIO_SEGMENT
 
             # assert train_config.max_segment_waveform_frames == 4000, "WAV_TOKENIZER_CODES_LENGTH_FOR_LONGEST_AUDIO_SEGMENT relies on that"
-            self.audio_encoder_projection = nn.Linear(linear_features, lm_decoder.config.hidden_size)
+            self.audio_encoder_projection = nn.Sequential(
+                nn.Linear(linear_features, 4096),
+                nn.ReLU(),
+                nn.Linear(4096, lm_decoder.config.hidden_size),
+            )
         elif projection_type == SegmentProjectionEnum.mean:
             # no special parameters
+            linear_features = 1024 # hubert embedding dim
+            self.audio_encoder_projection = nn.Linear(linear_features, lm_decoder.config.hidden_size)
             pass
         else:
             raise ValueError("Unhandled projection type:")
@@ -112,8 +120,11 @@ class TokenizedSpeechLM(nn.Module):
 
         elif self.audio_encoder_type == AudioEncoderType.hubert:
             with torch.no_grad():
+                ae_waveform = waveform
+                if self.audio_encoder.dtype != ae_waveform.dtype:
+                    ae_waveform = ae_waveform.to(self.audio_encoder.dtype)
                 audio_hidden_states = self.audio_encoder(
-                    input_values=waveform.to(torch.float16),
+                    input_values=ae_waveform,
                     attention_mask=waveforms_mask,
                 ).last_hidden_state
 
@@ -123,11 +134,6 @@ class TokenizedSpeechLM(nn.Module):
 
         else:
             raise NotImplementedError
-
-        assert not audio_hidden_states.isnan().any()
-
-        audio_hidden_states = F.normalize(audio_hidden_states, dim=-1)
-        audio_hidden_states = audio_hidden_states * self.audio_embeddings_scale
 
         assert not audio_hidden_states.isnan().any()
 
@@ -152,7 +158,12 @@ class TokenizedSpeechLM(nn.Module):
             nn.init.normal_(self.audio_embeddings_pooling.l_out.weight, mean=0, std=std)
 
         if hasattr(self, 'audio_encoder_projection'):
-            nn.init.normal_(self.audio_encoder_projection.weight, mean=0, std=std)
+            if isinstance(self.audio_encoder_projection, nn.Linear):
+                nn.init.normal_(self.audio_encoder_projection.weight, mean=0, std=std)
+            if isinstance(self.audio_encoder_projection, nn.Sequential):
+                for layer in self.audio_encoder_projection:
+                    if isinstance(layer, nn.Linear):
+                        nn.init.normal_(layer.weight, mean=0, std=std)
 
         return
 
@@ -165,7 +176,10 @@ class TokenizedSpeechLM(nn.Module):
         if inputs_embeds.dtype != self.lm_decoder.dtype:
             inputs_embeds = inputs_embeds.to(self.lm_decoder.dtype)
 
-        return self.lm_decoder.forward(input_ids=input_ids, inputs_embeds=inputs_embeds, attention_mask=attention_mask, output_attentions=None)
+        assert inputs_embeds.shape[0] == attention_mask.shape[0]
+        assert inputs_embeds.shape[1] == attention_mask.shape[1]
+
+        return self.lm_decoder.forward(input_ids=input_ids, inputs_embeds=inputs_embeds, attention_mask=attention_mask, output_attentions=output_attentions)
 
     def encode_text(self, input_ids=None):
         return self.lm_decoder.model.embed_tokens(input_ids)

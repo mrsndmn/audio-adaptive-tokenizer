@@ -54,7 +54,7 @@ class TrainConfig(BaseExperiment):
     train_batch_size: int = 25
     val_batch_size: int = 1
     learning_rate: float = 3e-4
-    # gradient_accumulation_steps = 2
+    gradient_accumulation_steps: Optional[int] = None
 
     evaluate_every_epoch_mod: int = 10
     save_model_every_epoch_mod: int = 10
@@ -75,6 +75,9 @@ class TrainConfig(BaseExperiment):
     unfreeze_lm_at_epoch: Optional[int]
     optim_audio_encoder: bool = False
 
+    # Model debug
+    debug_attentions: bool = False
+
     # Segmentation
     segmentation: SegmentationType
     uniform_segmentation_frames_per_segment: Optional[int]
@@ -84,6 +87,7 @@ class TrainConfig(BaseExperiment):
     few_val_samples: int = 1
     dataloader_num_workers: int = 5
     n_words: Optional[int] = None
+    add_prefix: bool = True
     # dataloader_num_workers = 0
 
     not_segmented_dataset: bool = False
@@ -111,7 +115,7 @@ def overfit_one_batch_train_config():
 
     return TrainConfig(
         num_epochs = 1,
-        train_batch_size = 10,
+        train_batch_size = 1,
         val_batch_size = 1,
         learning_rate = 1e-4,
         # gradient_accumulation_steps = 2
@@ -122,30 +126,32 @@ def overfit_one_batch_train_config():
         no_validation = False,
 
         sampling_rate = 16000,
-        max_segment_waveform_frames = 1600,
+        max_segment_waveform_frames = 8000,
 
         # Model
         audio_encoder_type = AudioEncoderType.hubert,
         audio_encoder_pretrained_model = "facebook/hubert-large-ls960-ft",
-        lm_pretrained_model = "HuggingFaceTB/SmolLM-135M-Instruct",
+        lm_pretrained_model = "Qwen/Qwen1.5-1.8B",
         from_pretrained = None,
 
         optim_lm = True,
+        lm_flash_attention = False,
         unfreeze_lm_at_epoch = None,
         optim_audio_encoder = False,
 
         segment_projection = SegmentProjectionEnum.linear,
-        segmentation = SegmentationType.none,
-        uniform_segmentation_frames_per_segment = None,
+        segmentation = SegmentationType.uniform,
+        uniform_segmentation_frames_per_segment = 8000,
         segment_boarders_noize = False,
 
         # Data
-        few_train_samples = 300,
-        few_val_samples = 1,
+        few_train_samples = 10,
+        few_val_samples = 5,
         dataloader_num_workers = 0,
-        n_words=5,
+        n_words=50,
+        not_segmented_dataset = True,
 
-        train_dataset_path = "data/libris_with_segments_1_shard.dataset",
+        train_dataset_path = "data/libris_with_segments_shard_1-4.dataset/",
         validation_dataset_path = "data/libris_with_segments_valid.dataset",
     )
 
@@ -154,23 +160,23 @@ def full_unfreeze_train_config():
 
     return TrainConfig(
         num_epochs = 500,
-        train_batch_size = 30,
-        val_batch_size = 10,
-        learning_rate = 1e-3,
-        gradient_accumulation_steps = 7,
+        train_batch_size = 25,
+        val_batch_size = 5,
+        learning_rate = 1e-4,
+        gradient_accumulation_steps = 2,
 
-        evaluate_every_epoch_mod = 1,
-        save_model_every_epoch_mod = 1,
+        evaluate_every_epoch_mod = 10,
+        save_model_every_epoch_mod = 10,
 
         no_validation = False,
 
         sampling_rate = 16000,
-        max_segment_waveform_frames = 1600,
+        max_segment_waveform_frames = 8000,
 
         # Model
         audio_encoder_type = AudioEncoderType.hubert,
         audio_encoder_pretrained_model = "facebook/hubert-large-ls960-ft",
-        lm_pretrained_model = "HuggingFaceTB/SmolLM-135M-Instruct",
+        lm_pretrained_model = "Qwen/Qwen1.5-1.8B",
         from_pretrained = None,
 
         optim_lm = False,
@@ -179,14 +185,14 @@ def full_unfreeze_train_config():
         optim_audio_encoder = False,
 
         segment_projection = SegmentProjectionEnum.linear,
-        segmentation = SegmentationType.none,
-        uniform_segmentation_frames_per_segment = None,
+        segmentation = SegmentationType.uniform,
+        uniform_segmentation_frames_per_segment = 8000,
         segment_boarders_noize = False,
 
         # Data
-        few_train_samples = None,
+        few_train_samples = 10000,
         few_val_samples = 100,
-        dataloader_num_workers = 10,
+        dataloader_num_workers = 30,
         n_words=50,
         not_segmented_dataset = True,
 

@@ -12,7 +12,7 @@ import evaluate
 
 import datasets
 
-from torch.optim import Adam
+from torch.optim import Adam, AdamW
 from torch.utils.data import DataLoader
 import transformers
 from transformers import AutoTokenizer, LlamaForCausalLM, HubertModel
@@ -59,7 +59,7 @@ def train(
         wer_compute=None,
         ):
 
-    optimizer = Adam(model.parameters(), lr=train_config.learning_rate)
+    optimizer = AdamW(model.parameters(), lr=train_config.learning_rate, weight_decay=0.1)
 
     optimizer_lr_scheduler = None
     # if train_config.max_lr > 0.0:
@@ -78,7 +78,9 @@ def train(
     )
     wandb_run = accelerator.get_tracker('wandb')
 
-    accelerator.gradient_accumulation_steps = train_config.gradient_accumulation_steps
+    if train_config.gradient_accumulation_steps is not None:
+        accelerator.gradient_accumulation_steps = train_config.gradient_accumulation_steps
+
     model, optimizer, train_dataloader, val_dataloader = accelerator.prepare(model, optimizer, train_dataloader, val_dataloader)
 
     last_validation_wer=0.0
@@ -132,7 +134,7 @@ def build_lm_decoder(train_config: TrainConfig, from_pretrained=None, device=Non
     return lm_decoder
 
 
-def build_audio_encoder(train_config: TrainConfig):
+def build_audio_encoder(train_config: TrainConfig, device=None):
 
     if train_config.audio_encoder_type == AudioEncoderType.speechTokenizer:
         config_path = 'data/speechtokenizer/config.json'
@@ -140,8 +142,15 @@ def build_audio_encoder(train_config: TrainConfig):
         model = SpeechTokenizer.load_from_checkpoint(config_path, ckpt_path)
         model.eval()
     else:
-        model = HubertModel.from_pretrained("facebook/hubert-large-ls960-ft", mask_time_prob=0.0, torch_dtype=torch.float16, attn_implementation="flash_attention_2")
+        kwargs = dict()
+        if device is not None and 'cuda' in str(device):
+            kwargs['torch_dtype'] = torch.float16
+            kwargs['attn_implementation'] = "flash_attention_2"
+
+        model = HubertModel.from_pretrained("facebook/hubert-large-ls960-ft", mask_time_prob=0.0, **kwargs)
         model.eval()
+
+    model = model.to(device)
 
     return model
 
@@ -154,7 +163,11 @@ def build_model(train_config: TrainConfig, from_pretrained=None, device=None):
     tokenizer.add_bos_token = True
     tokenizer.add_eos_token = True
 
-    audio_encoder = build_audio_encoder(train_config)
+    if 'qwen' in train_config.lm_pretrained_model.lower():
+        tokenizer.bos_token_id = tokenizer.encode('<|im_start|>')[0]
+        tokenizer.eos_token_id = tokenizer.encode('<|im_end|>')[0]
+
+    audio_encoder = build_audio_encoder(train_config, device=device)
 
     if from_pretrained is not None:
         lm_decoder = build_lm_decoder(train_config, from_pretrained=from_pretrained, device=device)
@@ -199,6 +212,7 @@ if __name__ == '__main__':
         train_config = full_unfreeze_train_config()
 
     device = train_config.nn_device
+    device_placement = True
     logger.info(f"device {device}")
 
     logger.info("loading language model")
@@ -207,7 +221,7 @@ if __name__ == '__main__':
 
     logger.info("model was loaded")
 
-    train_dataloader, val_dataloader = build_dataloaders(train_config)
+    train_dataloader, val_dataloader = build_dataloaders(train_config, tokenizer)
 
     captioning_metrics = evaluate.combine(
         [

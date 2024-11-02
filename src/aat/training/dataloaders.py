@@ -14,39 +14,31 @@ from aat.training.collate import TokenizedAudioWaveformCollator, NoSegmentationA
 logger = logging.getLogger(__name__)
 logging.basicConfig(level=logging.INFO, format='%(asctime)s %(levelname)s %(message)s')
 
-def build_tokenizer(train_config: TrainConfig, tokenizer_config=None):
-    tokenizer = AutoTokenizer.from_pretrained(train_config.lm_pretrained_model, config=tokenizer_config)
-    tokenizer.add_bos_token = True
-    tokenizer.add_eos_token = True
 
-    return tokenizer
-
-def build_collate_fn(train_config: TrainConfig, validation=False):
+def build_collate_fn(train_config: TrainConfig, tokenizer, validation=False):
     max_segment_duration_milliseconds = int(train_config.max_segment_waveform_frames * 1000 / train_config.sampling_rate)
     audio_tokenizer = AdaptiveAudioAmplitudeTokenizer(
         max_segment_duration_milliseconds=max_segment_duration_milliseconds,
     )
 
-    def build_text_tokenizer():
-        return build_tokenizer(train_config)
 
     n_words = None if validation else train_config.n_words
     noise_augmentation = False if validation else True
 
     if train_config.segmentation == SegmentationType.none:
-        return NoSegmentationAudioWaveformCollator(train_config, build_text_tokenizer, sampling_rate=train_config.sampling_rate)
+        return NoSegmentationAudioWaveformCollator(train_config, tokenizer, sampling_rate=train_config.sampling_rate)
 
     return TokenizedAudioWaveformCollator(
         train_config,
         audio_tokenizer,
-        build_text_tokenizer,
+        tokenizer,
         n_words=n_words,
         noise_augmentation=noise_augmentation,
         sampling_rate=train_config.sampling_rate,
         max_segment_waveform_frames=train_config.max_segment_waveform_frames,
     )
 
-def build_train_dataloader(audio_stt_dataset, train_config: TrainConfig):
+def build_train_dataloader(audio_stt_dataset, train_config: TrainConfig, tokenizer):
 
     shuffle = False
     if train_config.few_train_samples is not None:
@@ -55,21 +47,21 @@ def build_train_dataloader(audio_stt_dataset, train_config: TrainConfig):
 
     persistent_workers = True if train_config.dataloader_num_workers > 0 else False
 
-    return DataLoader(audio_stt_dataset, collate_fn=build_collate_fn(train_config),
+    return DataLoader(audio_stt_dataset, collate_fn=build_collate_fn(train_config, tokenizer),
                       batch_size=train_config.train_batch_size, num_workers=train_config.dataloader_num_workers,
                       drop_last=True, pin_memory=True, shuffle=shuffle, persistent_workers=persistent_workers)
 
 
-def build_val_dataloader(audio_stt_dataset, train_config: TrainConfig):
+def build_val_dataloader(audio_stt_dataset, train_config: TrainConfig, tokenizer):
 
     if train_config.few_val_samples is not None:
         audio_stt_dataset = audio_stt_dataset.select(range(train_config.few_val_samples))
 
     return DataLoader(audio_stt_dataset,
-                      collate_fn=build_collate_fn(train_config, validation=True),
+                      collate_fn=build_collate_fn(train_config, tokenizer, validation=True),
                       batch_size=train_config.val_batch_size, pin_memory=True)
 
-def build_dataloaders(train_config: TrainConfig):
+def build_dataloaders(train_config: TrainConfig, tokenizer):
 
     # dataset_files = [ f'libris/train-{i:05}-of-00064.parquet' for i in range(train_config.dataset_shards) ] # 1 shard = 1 gb of data
     # logger.info(f"dataset_files {dataset_files}")
@@ -109,11 +101,11 @@ def build_dataloaders(train_config: TrainConfig):
 
     logger.info("load train dataloader")
     train_dataloader = build_train_dataloader(
-        audio_dataset, train_config
+        audio_dataset, train_config, tokenizer
     )
     logger.info("load val dataloader")
     val_dataloader = build_val_dataloader(
-        audio_dataset_val, train_config
+        audio_dataset_val, train_config, tokenizer
     )
 
     return train_dataloader, val_dataloader

@@ -27,6 +27,9 @@ def train_loop(accelerator: accelerate.Accelerator, train_config: TrainConfig, m
         with accelerator.accumulate(model):
             model_inputs_with_audio = prepare_model_inputs_from_batch(train_config, model, batch, device=device)
 
+            if train_config.debug_attentions:
+                model_inputs_with_audio['output_attentions'] = True
+
             model_prediction = model.forward(**model_inputs_with_audio)
 
             # model_prediction
@@ -37,15 +40,16 @@ def train_loop(accelerator: accelerate.Accelerator, train_config: TrainConfig, m
 
             shifted_batch_input_ids = batch_input_ids[:, 1:]  # [ bs, caption_length - 1 ]
             shifted_input_ids_attention_mask = batch_input_ids_attention_mask[:, 1:]
+            assert shifted_batch_input_ids.shape == shifted_input_ids_attention_mask.shape
 
             model_prediction_caption_flatten = model_prediction_caption.flatten(0, 1)
             input_ids_flatten = shifted_batch_input_ids.flatten(0, 1)
             input_ids_attention_mask_flatten = shifted_input_ids_attention_mask.flatten(0, 1).bool()
+            assert model_prediction_caption_flatten.shape[0] == input_ids_flatten.shape[0]
 
             # do not train to predict pad token
             model_prediction_caption_flatten = model_prediction_caption_flatten[input_ids_attention_mask_flatten]
             input_ids_flatten = input_ids_flatten[input_ids_attention_mask_flatten]
-
 
             loss = criterion(model_prediction_caption_flatten, input_ids_flatten)
 
@@ -79,6 +83,20 @@ def train_loop(accelerator: accelerate.Accelerator, train_config: TrainConfig, m
                 "debug/audio_eos_mean": audio_eos_mean,
                 "debug/audio_eos_norm": audio_eos_norm,
             }
+
+            if train_config.debug_attentions:
+                model_prediction_attentions = model_prediction.attentions
+                for layer_i in range(len(model_prediction_attentions)):
+                    layer_attention = model_prediction_attentions[layer_i]
+                    audio_weights = layer_attention[:, :, :audio_embeds_len, :audio_embeds_len]
+                    text_weights = layer_attention[:, :, audio_embeds_len:, audio_embeds_len:]
+
+                    audio_weights_flatten = audio_weights.flatten()[audio_weights.flatten() != 0]
+                    text_weights_flatten = text_weights.flatten()[text_weights.flatten() != 0]
+                    step_metrics[f'debug_attention_{layer_i}/audio_mean_weight'] = audio_weights_flatten.mean()
+                    step_metrics[f'debug_attention_{layer_i}/text_mean_weight'] = text_weights_flatten.mean()
+                    step_metrics[f'debug_attention_{layer_i}/audio_sum_weight'] = audio_weights_flatten.sum()
+                    step_metrics[f'debug_attention_{layer_i}/text_sum_weight'] = text_weights_flatten.sum()
 
             model.zero_grad()
 
