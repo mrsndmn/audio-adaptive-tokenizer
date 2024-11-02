@@ -56,7 +56,7 @@ def train_loop(accelerator: accelerate.Accelerator, train_config: TrainConfig, m
             audio_embeds_len = batch['audio_embeds_attention_mask'].shape[-1]
             audio_embeddings = model_inputs_with_audio['inputs_embeds'][:, :audio_embeds_len, :].flatten(0, 1)[batch['audio_embeds_attention_mask'].flatten().bool()]
             audio_embeddings_norm_mean = audio_embeddings.norm(2, dim=-1).mean().item()
-            assert audio_embeddings_norm_mean < 20
+
             audio_embeddings_mean = audio_embeddings.mean(dim=-1).mean().item()
 
             text_embeddings = model_inputs_with_audio['inputs_embeds'][:, audio_embeds_len+1:, :].flatten(0, 1)[model_inputs_with_audio['attention_mask'][:, audio_embeds_len+1:].flatten().bool()]

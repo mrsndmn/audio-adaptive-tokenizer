@@ -92,13 +92,6 @@ def _inplace_audio_encode_batch(train_config: TrainConfig, model: TokenizedSpeec
         audio_hidden_states = sum_audio_hidden_states / (sum_codes_from_attention_mask + 1e-9)
         audio_hidden_states = model.audio_encoder_projection(audio_hidden_states)
 
-
-        audio_hidden_states = F.normalize(audio_hidden_states, dim=-1)
-        audio_hidden_states = audio_hidden_states * model.audio_embeddings_scale
-
-        assert not audio_hidden_states.isnan().any()
-
-
         # [ bs, segments_count, embedding_dim ]
         audio_hidden_states = audio_hidden_states.unflatten(0, [batch_size, segments_count])
     elif train_config.segment_projection == SegmentProjectionEnum.linear:
@@ -112,6 +105,11 @@ def _inplace_audio_encode_batch(train_config: TrainConfig, model: TokenizedSpeec
         audio_hidden_states = audio_hidden_states.unflatten(0, [batch_size, segments_count])
     else:
         raise ValueError(f"unsupported segment_projection: {train_config.segment_projection}")
+
+    # audio_hidden_states = F.normalize(audio_hidden_states, dim=-1)
+    # audio_hidden_states = audio_hidden_states * model.audio_embeddings_scale
+
+    assert not audio_hidden_states.isnan().any()
 
     audio_hidden_states = model.audio_encoder_dropout(audio_hidden_states)
 

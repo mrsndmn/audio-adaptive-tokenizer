@@ -159,14 +159,14 @@ def overfit_one_batch_train_config():
 def full_unfreeze_train_config():
 
     return TrainConfig(
-        num_epochs = 500,
-        train_batch_size = 25,
+        num_epochs = 5,
+        train_batch_size = 15,
         val_batch_size = 5,
-        learning_rate = 1e-4,
-        gradient_accumulation_steps = 2,
+        learning_rate = 2e-4,
+        gradient_accumulation_steps = 4,
 
-        evaluate_every_epoch_mod = 10,
-        save_model_every_epoch_mod = 10,
+        evaluate_every_epoch_mod = 1,
+        save_model_every_epoch_mod = 1,
 
         no_validation = False,
 
@@ -190,7 +190,7 @@ def full_unfreeze_train_config():
         segment_boarders_noize = False,
 
         # Data
-        few_train_samples = 10000,
+        few_train_samples = None,
         few_val_samples = 100,
         dataloader_num_workers = 30,
         n_words=50,

@@ -31,8 +31,14 @@ from aat.training.validate import val_loop
 from aat.training.train import train_loop
 from aat.training.dataloaders import build_dataloaders
 
+from aat.lr_scheduler import WarmupLRScheduler
+
 from aat.training.collate import TokenizedAudioWaveformCollator
 
+from transformers.trainer import (
+    get_parameter_names,
+    ALL_LAYERNORM_LAYERS,
+)
 
 logger = logging.getLogger(__name__)
 logging.basicConfig(level=logging.INFO, format='%(asctime)s %(levelname)s %(message)s')
@@ -59,9 +65,25 @@ def train(
         wer_compute=None,
         ):
 
-    optimizer = AdamW(model.parameters(), lr=train_config.learning_rate, weight_decay=0.1)
+    decay_parameters = get_parameter_names(model, ALL_LAYERNORM_LAYERS)
+    decay_parameters = [name for name in decay_parameters if "bias" not in name]
+    optimizer_grouped_parameters = [
+        {
+            "params": [
+                p for n, p in model.named_parameters() if (n in decay_parameters and p.requires_grad)
+            ],
+            "weight_decay": 0.1,
+        },
+        {
+            "params": [
+                p for n, p in model.named_parameters() if (n not in decay_parameters and p.requires_grad)
+            ],
+            "weight_decay": 0.0,
+        },
+    ]
+    optimizer = AdamW(optimizer_grouped_parameters, lr=train_config.learning_rate)
 
-    optimizer_lr_scheduler = None
+    optimizer_lr_scheduler = WarmupLRScheduler(optimizer, warmup_steps=300)
     # if train_config.max_lr > 0.0:
     #     optimizer_lr_scheduler = CyclicLR(optimizer, base_lr=train_config.learning_rate, max_lr=train_config.max_lr, step_size_up=train_config.step_size_up)
 
