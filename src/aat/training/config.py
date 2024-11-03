@@ -114,7 +114,7 @@ class TrainConfig(BaseExperiment):
 def overfit_one_batch_train_config():
 
     return TrainConfig(
-        num_epochs = 1,
+        num_epochs = 2,
         train_batch_size = 1,
         val_batch_size = 1,
         learning_rate = 1e-4,
@@ -134,8 +134,8 @@ def overfit_one_batch_train_config():
         lm_pretrained_model = "Qwen/Qwen1.5-1.8B",
         from_pretrained = None,
 
-        optim_lm = True,
-        lm_flash_attention = False,
+        optim_lm = False,
+        lm_flash_attention = True,
         unfreeze_lm_at_epoch = None,
         optim_audio_encoder = False,
 
@@ -159,7 +159,7 @@ def overfit_one_batch_train_config():
 def full_unfreeze_train_config():
 
     return TrainConfig(
-        num_epochs = 5,
+        num_epochs = 100,
         train_batch_size = 15,
         val_batch_size = 5,
         learning_rate = 2e-4,
@@ -180,7 +180,7 @@ def full_unfreeze_train_config():
         from_pretrained = None,
 
         optim_lm = False,
-        lm_flash_attention = False,
+        lm_flash_attention = True,
         unfreeze_lm_at_epoch = None,
         optim_audio_encoder = False,
 

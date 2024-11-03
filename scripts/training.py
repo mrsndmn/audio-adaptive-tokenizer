@@ -6,6 +6,7 @@ import argparse
 import pathlib
 import torch
 import torch.nn as nn
+from torch.cuda.amp import autocast
 
 import logging
 import evaluate
@@ -83,7 +84,7 @@ def train(
     ]
     optimizer = AdamW(optimizer_grouped_parameters, lr=train_config.learning_rate)
 
-    approximate_max_steps = len(train_dataloader.dataset) // train_dataloader.batch_size
+    approximate_max_steps = (len(train_dataloader.dataset) // train_dataloader.batch_size) * train_config.num_epochs
     logger.info(f"approximate_max_steps={approximate_max_steps}")
     optimizer_lr_scheduler = WarmupLRScheduler(optimizer, warmup_steps=300, max_steps=approximate_max_steps)
     # if train_config.max_lr > 0.0:
@@ -225,6 +226,8 @@ if __name__ == '__main__':
 
     args = parser.parse_args()
 
+    torch.backends.cuda.matmul.allow_tf32 = True
+
         #  2. Capture a dictionary of hyperparameters
     # with open(args.config, 'r') as f:
     #     config_json_data = f.read()
@@ -266,6 +269,7 @@ if __name__ == '__main__':
     os.environ["TOKENIZERS_PARALLELISM"] = "false"
 
     def run_training():
+        
         train(
             model=model,
             tokenizer=tokenizer,
@@ -281,7 +285,8 @@ if __name__ == '__main__':
     if args.profile:
         logger.info("Run training with profiling")
         with cProfile.Profile() as pr:
-            run_training()
+            with autocast(dtype=torch.bfloat16):
+                run_training()
 
             profile_file_name = "train_profile.prof"
             logger.info(f"Save profile: {profile_file_name}")

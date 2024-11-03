@@ -76,7 +76,7 @@ def val_loop(train_config: TrainConfig, model: TokenizedSpeechLM, tokenizer, val
         # attention_mask_bos = torch.ones_like(generations_bos)
         model_inputs_with_only_audio = model.prepare_audio_inputs(
             input_ids=batch['prefix_input_ids'],
-            attention_mask=result['prefix_attention_mask'],
+            attention_mask=batch['prefix_attention_mask'],
             audio_embeds=audio_embeds_last_hidden_state,
             audio_embeds_attention_mask=audio_embeds_attention_mask,
         )
@@ -89,6 +89,9 @@ def val_loop(train_config: TrainConfig, model: TokenizedSpeechLM, tokenizer, val
             **model_inputs_with_only_audio,
             **gen_params,
         }
+
+        if model.lm_decoder.dtype != all_generation_params['inputs_embeds'].dtype:
+            all_generation_params['inputs_embeds'] = all_generation_params['inputs_embeds'].to(model.lm_decoder.dtype)
 
         model_generation = model.lm_decoder.generate(**all_generation_params)
         generated_sentences = tokenizer.batch_decode(model_generation, skip_special_tokens=True)

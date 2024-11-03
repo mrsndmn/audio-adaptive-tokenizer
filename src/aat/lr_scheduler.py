@@ -47,7 +47,6 @@ class WarmupLRScheduler(LRScheduler):
 
         result_lr = []
         for warmup_steps, max_steps, base_lr in zip(self.warmup_steps, self.max_steps, self.base_lrs):
-            assert warmup_steps < max_steps
 
             if self._step_count > max_steps:
                 result_lr.append(self.start_lr_from)
