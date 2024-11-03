@@ -49,11 +49,13 @@ class WarmupLRScheduler(LRScheduler):
         for warmup_steps, max_steps, base_lr in zip(self.warmup_steps, self.max_steps, self.base_lrs):
             assert warmup_steps < max_steps
 
-            if self._step_count > warmup_steps:
-                current_annealing_step = warmup_steps - self._step_count
+            if self._step_count > max_steps:
+                result_lr.append(self.start_lr_from)
+            elif self._step_count > warmup_steps:
+                current_annealing_step = self._step_count - warmup_steps
                 annealing_steps_total = max_steps - warmup_steps
                 annealing_step_decrement = (base_lr - self.start_lr_from) / annealing_steps_total
-                result_lr.append(base_lr - current_annealing_step * )
+                result_lr.append(base_lr - current_annealing_step * annealing_step_decrement)
             else:
                 result_lr.append(base_lr * self._step_count / warmup_steps)
 

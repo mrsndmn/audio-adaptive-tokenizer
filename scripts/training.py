@@ -83,7 +83,9 @@ def train(
     ]
     optimizer = AdamW(optimizer_grouped_parameters, lr=train_config.learning_rate)
 
-    optimizer_lr_scheduler = WarmupLRScheduler(optimizer, warmup_steps=300)
+    approximate_max_steps = len(train_dataloader.dataset) // train_dataloader.batch_size
+    logger.info(f"approximate_max_steps={approximate_max_steps}")
+    optimizer_lr_scheduler = WarmupLRScheduler(optimizer, warmup_steps=300, max_steps=approximate_max_steps)
     # if train_config.max_lr > 0.0:
     #     optimizer_lr_scheduler = CyclicLR(optimizer, base_lr=train_config.learning_rate, max_lr=train_config.max_lr, step_size_up=train_config.step_size_up)
 

@@ -72,11 +72,11 @@ def val_loop(train_config: TrainConfig, model: TokenizedSpeechLM, tokenizer, val
         audio_embeds_last_hidden_state = batch['audio_embeds_last_hidden_state'].to(device)
         audio_embeds_attention_mask = batch['audio_embeds_attention_mask'].to(device)
 
-        generations_bos = torch.full([ audio_embeds_last_hidden_state.shape[0], 1 ], tokenizer.bos_token_id, device=device)
-        attention_mask_bos = torch.ones_like(generations_bos)
+        # generations_bos = torch.full([ audio_embeds_last_hidden_state.shape[0], 1 ], tokenizer.bos_token_id, device=device)
+        # attention_mask_bos = torch.ones_like(generations_bos)
         model_inputs_with_only_audio = model.prepare_audio_inputs(
-            input_ids=attention_mask_bos,
-            attention_mask=attention_mask_bos,
+            input_ids=batch['prefix_input_ids'],
+            attention_mask=result['prefix_attention_mask'],
             audio_embeds=audio_embeds_last_hidden_state,
             audio_embeds_attention_mask=audio_embeds_attention_mask,
         )
