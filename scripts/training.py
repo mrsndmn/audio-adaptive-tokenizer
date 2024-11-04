@@ -27,10 +27,11 @@ from speechtokenizer import SpeechTokenizer
 
 from aat.tokenizer import AdaptiveAudioAmplitudeTokenizer
 
-from aat.training.config import TrainConfig, overfit_one_batch_train_config, full_unfreeze_train_config, AudioEncoderType
+from aat.training.config import TrainConfig, overfit_one_batch_train_config, full_unfreeze_train_config, finetuning_lm, AudioEncoderType
 from aat.training.validate import val_loop
 from aat.training.train import train_loop
 from aat.training.dataloaders import build_dataloaders
+from aat.training.optimizers import Adafactor
 
 from aat.lr_scheduler import WarmupLRScheduler
 
@@ -64,6 +65,7 @@ def train(
         device=None,
         captioning_metrics=None,
         wer_compute=None,
+        finetuning=False,
         ):
 
     decay_parameters = get_parameter_names(model, ALL_LAYERNORM_LAYERS)
@@ -82,7 +84,10 @@ def train(
             "weight_decay": 0.0,
         },
     ]
-    optimizer = AdamW(optimizer_grouped_parameters, lr=train_config.learning_rate)
+    if finetuning:
+        optimizer = Adafactor(optimizer_grouped_parameters, lr=train_config.learning_rate, relative_step=False)
+    else:
+        optimizer = AdamW(optimizer_grouped_parameters, lr=train_config.learning_rate)
 
     approximate_max_steps = (len(train_dataloader.dataset) // train_dataloader.batch_size) * train_config.num_epochs
     logger.info(f"approximate_max_steps={approximate_max_steps}")
@@ -222,6 +227,7 @@ if __name__ == '__main__':
     parser = argparse.ArgumentParser()
     # parser.add_argument('-c', '--config')
     parser.add_argument('-t', '--test-run', action='store_true', default=False)
+    parser.add_argument('-f', '--finetune', action='store_true', default=False)
     parser.add_argument('-p', '--profile', action='store_true', default=False)
 
     args = parser.parse_args()
@@ -233,7 +239,9 @@ if __name__ == '__main__':
     #     config_json_data = f.read()
     # train_config = TrainConfig.model_validate_json(config_json_data)
 
-    if args.test_run:
+    if args.finetune:
+        train_config = finetuning_lm()
+    elif args.test_run:
         train_config = overfit_one_batch_train_config()
     else:
         train_config = full_unfreeze_train_config()
@@ -269,7 +277,6 @@ if __name__ == '__main__':
     os.environ["TOKENIZERS_PARALLELISM"] = "false"
 
     def run_training():
-        
         train(
             model=model,
             tokenizer=tokenizer,
@@ -280,16 +287,22 @@ if __name__ == '__main__':
             wer_compute=wer_compute,
             device=device,
             device_placement=True,
+            finetuning=args.finetune,
         )
 
     if args.profile:
         logger.info("Run training with profiling")
         with cProfile.Profile() as pr:
-            with autocast(dtype=torch.bfloat16):
+
+            if train_config.optim_lm:
                 run_training()
+            else:
+                with autocast(dtype=torch.bfloat16):
+                    run_training()
 
             profile_file_name = "train_profile.prof"
             logger.info(f"Save profile: {profile_file_name}")
             pr.dump_stats(profile_file_name)
     else:
         run_training()
+

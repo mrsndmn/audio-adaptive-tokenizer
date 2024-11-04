@@ -177,7 +177,7 @@ def full_unfreeze_train_config():
         audio_encoder_type = AudioEncoderType.hubert,
         audio_encoder_pretrained_model = "facebook/hubert-large-ls960-ft",
         lm_pretrained_model = "Qwen/Qwen1.5-1.8B",
-        from_pretrained = None,
+        from_pretrained = "data/models/dry-haze-254/last",
 
         optim_lm = False,
         lm_flash_attention = True,
@@ -192,6 +192,50 @@ def full_unfreeze_train_config():
         # Data
         few_train_samples = None,
         few_val_samples = 100,
+        dataloader_num_workers = 30,
+        n_words=50,
+        not_segmented_dataset = True,
+
+        train_dataset_path = "data/libris_with_segments_shard_1-4.dataset/",
+        validation_dataset_path = "data/libris_with_segments_valid.dataset",
+    )
+
+def finetuning_lm():
+
+    return TrainConfig(
+        num_epochs = 5,
+        train_batch_size = 15,
+        val_batch_size = 5,
+        learning_rate = 5e-5,
+        gradient_accumulation_steps = 5,
+
+        evaluate_every_epoch_mod = 1,
+        save_model_every_epoch_mod = 1,
+
+        no_validation = False,
+
+        sampling_rate = 16000,
+        max_segment_waveform_frames = 8000,
+
+        # Model
+        audio_encoder_type = AudioEncoderType.hubert,
+        audio_encoder_pretrained_model = "facebook/hubert-large-ls960-ft",
+        lm_pretrained_model = "Qwen/Qwen1.5-1.8B",
+        from_pretrained = "data/models/dry-haze-254/epoch-33",
+
+        optim_lm = True,
+        lm_flash_attention = False,
+        unfreeze_lm_at_epoch = None,
+        optim_audio_encoder = False,
+
+        segment_projection = SegmentProjectionEnum.linear,
+        segmentation = SegmentationType.uniform,
+        uniform_segmentation_frames_per_segment = 8000,
+        segment_boarders_noize = False,
+
+        # Data
+        few_train_samples = None,
+        few_val_samples = 1000,
         dataloader_num_workers = 30,
         n_words=50,
         not_segmented_dataset = True,
