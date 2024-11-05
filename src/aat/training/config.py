@@ -156,11 +156,11 @@ def overfit_one_batch_train_config():
     )
 
 
-def full_unfreeze_train_config():
+def projection_training():
 
     return TrainConfig(
         num_epochs = 100,
-        train_batch_size = 50,
+        train_batch_size = 40,
         val_batch_size = 5,
         learning_rate = 2e-4,
         gradient_accumulation_steps = 2,
@@ -185,7 +185,7 @@ def full_unfreeze_train_config():
         optim_audio_encoder = False,
 
         segment_projection = SegmentProjectionEnum.linear,
-        segmentation = SegmentationType.uniform,
+        segmentation = SegmentationType.none,
         uniform_segmentation_frames_per_segment = 8000,
         segment_boarders_noize = False,
 

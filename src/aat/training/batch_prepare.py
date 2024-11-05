@@ -27,7 +27,7 @@ def _inplace_audio_encode_batch_no_segmentation(train_config: TrainConfig, model
     elif train_config.segment_projection == SegmentProjectionEnum.linear:
         seq_len = audio_hidden_states.shape[1]
         batch_size = audio_hidden_states.shape[0]
-        cropped_seq_len = seq_len % model.HUBERT_EMBEDDINGS_LENGTH_FOR_LONGEST_AUDIO_SEGMENT
+        cropped_seq_len = seq_len - (seq_len % model.HUBERT_EMBEDDINGS_LENGTH_FOR_LONGEST_AUDIO_SEGMENT)
         redused_seq_len = cropped_seq_len // model.HUBERT_EMBEDDINGS_LENGTH_FOR_LONGEST_AUDIO_SEGMENT
         audio_hidden_states_cropped = audio_hidden_states[:, :cropped_seq_len, :]
         assert audio_hidden_states_cropped.shape[1] > 0
@@ -35,13 +35,18 @@ def _inplace_audio_encode_batch_no_segmentation(train_config: TrainConfig, model
 
         audio_hidden_states_cropped = audio_hidden_states_cropped.reshape(batch_size, redused_seq_len, -1)
 
-        audio_hidden_states_projection = model.audio_encoder_projection(audio_hidden_states_cropped)
+        audio_hidden_states = model.audio_encoder_projection(audio_hidden_states_cropped)
 
-        audio_hidden_states = audio_hidden_states_projection.reshape(batch_size, cropped_seq_len, -1)
+        embeddings_attention_mask = embeddings_attention_mask[:, :cropped_seq_len].reshape(batch_size, redused_seq_len, -1).any(dim=-1)
     else:
         raise ValueError(f"unsupported segment_projection: {train_config.segment_projection}")
 
     audio_hidden_states = model.audio_encoder_dropout(audio_hidden_states)
+
+    assert not audio_hidden_states.isnan().any()
+
+    assert audio_hidden_states.shape[0] == embeddings_attention_mask.shape[0]
+    assert audio_hidden_states.shape[1] == embeddings_attention_mask.shape[1]
 
     batch['audio_embeds_last_hidden_state'] = audio_hidden_states
     batch['audio_embeds_attention_mask'] = embeddings_attention_mask
@@ -110,6 +115,8 @@ def _inplace_audio_encode_batch(train_config: TrainConfig, model: TokenizedSpeec
     # audio_hidden_states = audio_hidden_states * model.audio_embeddings_scale
 
     assert not audio_hidden_states.isnan().any()
+    assert audio_hidden_states.shape[0] == embeddings_attention_mask.shape[0]
+    assert audio_hidden_states.shape[1] == embeddings_attention_mask.shape[1]
 
     audio_hidden_states = model.audio_encoder_dropout(audio_hidden_states)
 

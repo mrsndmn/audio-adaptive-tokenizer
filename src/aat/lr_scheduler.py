@@ -9,7 +9,7 @@ class WarmupLRScheduler(LRScheduler):
         optimizer: Optimizer,
         warmup_steps: Union[List[int], int],
         max_steps: Union[List[int], int],
-        start_lr_from: float=1e-6,
+        start_lr_from: float=1e-5,
         last_epoch=-1,
         verbose="deprecated",
     ):

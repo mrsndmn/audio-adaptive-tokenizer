@@ -27,7 +27,7 @@ from speechtokenizer import SpeechTokenizer
 
 from aat.tokenizer import AdaptiveAudioAmplitudeTokenizer
 
-from aat.training.config import TrainConfig, overfit_one_batch_train_config, full_unfreeze_train_config, finetuning_lm, AudioEncoderType
+from aat.training.config import TrainConfig, overfit_one_batch_train_config, projection_training, finetuning_lm, AudioEncoderType
 from aat.training.validate import val_loop
 from aat.training.train import train_loop
 from aat.training.dataloaders import build_dataloaders
@@ -244,7 +244,7 @@ if __name__ == '__main__':
     elif args.test_run:
         train_config = overfit_one_batch_train_config()
     else:
-        train_config = full_unfreeze_train_config()
+        train_config = projection_training()
 
     device = train_config.nn_device
     device_placement = True
