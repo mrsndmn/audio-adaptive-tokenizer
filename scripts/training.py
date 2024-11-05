@@ -6,7 +6,7 @@ import argparse
 import pathlib
 import torch
 import torch.nn as nn
-from torch.cuda.amp import autocast
+from torch.amp import autocast
 
 import logging
 import evaluate

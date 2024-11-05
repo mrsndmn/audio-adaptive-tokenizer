@@ -206,8 +206,8 @@ def finetuning_lm():
         num_epochs = 5,
         train_batch_size = 15,
         val_batch_size = 5,
-        learning_rate = 5e-5,
-        gradient_accumulation_steps = 5,
+        learning_rate = 2e-4,
+        gradient_accumulation_steps = 4,
 
         evaluate_every_epoch_mod = 1,
         save_model_every_epoch_mod = 1,
