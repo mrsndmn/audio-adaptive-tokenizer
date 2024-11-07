@@ -299,6 +299,7 @@ class NoSegmentationAudioWaveformCollator():
         eos_token = tokenizer.decode(tokenizer.eos_token_id)
         tokenizer_input = []
         audio_waveforms = []
+        tokenizer_input_prefixes_for_validation = []
 
         for i, item in enumerate(items):
             waveform = np.array(item['audio']['array'])
@@ -306,11 +307,19 @@ class NoSegmentationAudioWaveformCollator():
             waveform += np.random.rand(waveform.shape[-1]) * random.randint(1, 50) / 1000
 
             words = item['words']
+            prefix_for_validation = ""
+
             item_text = " ".join(words)
+            prefix_for_validation = ""
             if self.train_config.add_prefix:
-                item_text = random.choice(PREFIXES) + " " + item_text
+                prefix_for_validation = random.choice(PREFIXES) + " "
+                item_text = prefix_for_validation + item_text
+
+            prefix_for_validation = bos_token + prefix_for_validation
             text_for_item = bos_token + item_text + eos_token
+
             tokenizer_input.append(text_for_item)
+            tokenizer_input_prefixes_for_validation.append(prefix_for_validation)
 
             audio_waveforms.append(waveform)
 
@@ -319,6 +328,11 @@ class NoSegmentationAudioWaveformCollator():
         result['attention_mask'] = torch.tensor(tokenized_caption['attention_mask'])
 
         result['input_ids_attention_mask'] = result['attention_mask']
+
+        tokenized_caption_prefix = tokenizer(tokenizer_input_prefixes_for_validation, padding=True)
+        result['prefix_input_ids'] = torch.tensor(tokenized_caption_prefix['input_ids'])
+        result['prefix_attention_mask'] = torch.tensor(tokenized_caption_prefix['attention_mask'])
+
 
         segments_padded_normalized_with_mask = self.audio_processor(audio_waveforms, return_tensors="pt", sampling_rate=self.train_config.sampling_rate, padding=PaddingStrategy.LONGEST)
 

@@ -160,10 +160,10 @@ def projection_training():
 
     return TrainConfig(
         num_epochs = 100,
-        train_batch_size = 40,
+        train_batch_size = 25,
         val_batch_size = 5,
         learning_rate = 2e-4,
-        gradient_accumulation_steps = 2,
+        gradient_accumulation_steps = 4,
 
         evaluate_every_epoch_mod = 1,
         save_model_every_epoch_mod = 1,
@@ -177,7 +177,7 @@ def projection_training():
         audio_encoder_type = AudioEncoderType.hubert,
         audio_encoder_pretrained_model = "facebook/hubert-large-ls960-ft",
         lm_pretrained_model = "Qwen/Qwen1.5-1.8B",
-        from_pretrained = "data/models/dry-haze-254/last",
+        from_pretrained = None,
 
         optim_lm = False,
         lm_flash_attention = True,
