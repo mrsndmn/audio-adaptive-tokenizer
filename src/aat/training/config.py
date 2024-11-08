@@ -178,6 +178,7 @@ def projection_training():
         audio_encoder_pretrained_model = "facebook/hubert-large-ls960-ft",
         lm_pretrained_model = "Qwen/Qwen1.5-1.8B",
         from_pretrained = None,
+        hubert_embeddings_length_for_longest_audio_segment = 3,
 
         optim_lm = False,
         lm_flash_attention = True,

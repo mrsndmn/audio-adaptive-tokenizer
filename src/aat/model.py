@@ -42,7 +42,7 @@ class TokenizedSpeechLM(nn.Module):
     start_audio_token_id = 0
     end_audio_token_id = 1
 
-    def __init__(self, audio_encoder, lm_decoder, projection_type: SegmentProjectionEnum, audio_encoder_type: AudioEncoderType):
+    def __init__(self, audio_encoder, lm_decoder, projection_type: SegmentProjectionEnum, audio_encoder_type: AudioEncoderType, hubert_embeddings_length_for_longest_audio_segment):
         super().__init__()
 
         self.audio_encoder_type = audio_encoder_type
@@ -63,7 +63,7 @@ class TokenizedSpeechLM(nn.Module):
             WAV_TOKENIZER_CODES_LENGTH_FOR_LONGEST_AUDIO_SEGMENT = 5 # max_segment_waveform_frames == 1600
             # linear_features = lm_decoder.config.hidden_size * WAV_TOKENIZER_CODES_LENGTH_FOR_LONGEST_AUDIO_SEGMENT
             # HUBERT_EMBEDDINGS_LENGTH_FOR_LONGEST_AUDIO_SEGMENT = 24 # max_segment_waveform_frames == 1600
-            HUBERT_EMBEDDINGS_LENGTH_FOR_LONGEST_AUDIO_SEGMENT = 1
+            HUBERT_EMBEDDINGS_LENGTH_FOR_LONGEST_AUDIO_SEGMENT = hubert_embeddings_length_for_longest_audio_segment
             linear_features = 1024 * HUBERT_EMBEDDINGS_LENGTH_FOR_LONGEST_AUDIO_SEGMENT
 
             self.HUBERT_EMBEDDINGS_LENGTH_FOR_LONGEST_AUDIO_SEGMENT = HUBERT_EMBEDDINGS_LENGTH_FOR_LONGEST_AUDIO_SEGMENT
@@ -271,10 +271,10 @@ class TokenizedSpeechLM(nn.Module):
         return
 
     @classmethod
-    def from_pretrained(cls, audio_encoder, lm_model, projection_type, audio_encoder_type, model_id: str):
+    def from_pretrained(cls, audio_encoder, lm_model, projection_type, audio_encoder_type, hubert_embeddings_length_for_longest_audio_segment, model_id: str):
         print("load TokenizedSpeechLM from", model_id)
 
-        model = cls(audio_encoder, lm_model, projection_type=projection_type, audio_encoder_type=audio_encoder_type)
+        model = cls(audio_encoder, lm_model, projection_type=projection_type, audio_encoder_type=audio_encoder_type, hubert_embeddings_length_for_longest_audio_segment=hubert_embeddings_length_for_longest_audio_segment)
 
         audio_tokens_embeddings_path = os.path.join(model_id, "audio_tokens_embeddings.pt")
         audio_tokens_embeddings_state = torch.load(audio_tokens_embeddings_path, map_location=torch.device('cpu'))

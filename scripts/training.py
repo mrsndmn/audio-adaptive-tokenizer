@@ -202,10 +202,10 @@ def build_model(train_config: TrainConfig, from_pretrained=None, device=None):
     if from_pretrained is not None:
         lm_decoder = build_lm_decoder(train_config, from_pretrained=from_pretrained, device=device)
 
-        model = TokenizedSpeechLM.from_pretrained(audio_encoder, lm_decoder, projection_type=train_config.segment_projection, audio_encoder_type=train_config.audio_encoder_type,  model_id=from_pretrained)
+        model = TokenizedSpeechLM.from_pretrained(audio_encoder, lm_decoder, projection_type=train_config.segment_projection, audio_encoder_type=train_config.audio_encoder_type, hubert_embeddings_length_for_longest_audio_segment=train_config.hubert_embeddings_length_for_longest_audio_segment,  model_id=from_pretrained)
     else:
         lm_decoder = build_lm_decoder(train_config, from_pretrained=train_config.lm_pretrained_model, device=device)
-        model = TokenizedSpeechLM(audio_encoder, lm_decoder, projection_type=train_config.segment_projection, audio_encoder_type=train_config.audio_encoder_type)
+        model = TokenizedSpeechLM(audio_encoder, lm_decoder, projection_type=train_config.segment_projection, audio_encoder_type=train_config.audio_encoder_type, hubert_embeddings_length_for_longest_audio_segment=train_config.hubert_embeddings_length_for_longest_audio_segment)
 
         model.reinitialize_weights()
 
