@@ -160,10 +160,10 @@ def projection_training():
 
     return TrainConfig(
         num_epochs = 100,
-        train_batch_size = 25,
+        train_batch_size = 10,
         val_batch_size = 5,
         learning_rate = 2e-4,
-        gradient_accumulation_steps = 4,
+        gradient_accumulation_steps = 10,
 
         evaluate_every_epoch_mod = 1,
         save_model_every_epoch_mod = 1,
