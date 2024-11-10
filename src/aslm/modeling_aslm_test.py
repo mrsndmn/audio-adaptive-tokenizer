@@ -5,6 +5,8 @@ from transformers.modeling_outputs import CausalLMOutput
 from .modeling_aslm import AslmModel
 from .configuration_aslm import AslmConfig, AudioEncoderType, SegmentationType, SegmentProjectionEnum
 
+import tempfile
+
 def _prepare_model():
     hubert = HubertModel.from_pretrained("facebook/hubert-large-ls960-ft", mask_time_prob=0.0)
     hubert.eval()
@@ -21,16 +23,15 @@ def _prepare_model():
         max_segment_waveform_frames=None,
     )
     model = AslmModel(config, hubert, lm_decoder)
-    model = model.half()
 
-    return model, lm_decoder
+    return model, hubert, lm_decoder
 
-def test_tokenized_speech_lm():
+def test_aslm_basic_forward():
 
-    model, lm_decoder = _prepare_model()
+    model, hubert, lm_decoder = _prepare_model()
 
     seq_len = 10
-    audio_embeddings = torch.rand([1, seq_len, model.audio_encoder.config.hidden_size], dtype=torch.float16)
+    audio_embeddings = torch.rand([1, seq_len, model.audio_encoder.config.hidden_size], dtype=model.dtype)
     attention_mask = torch.ones([1, seq_len])
 
     model_inputs = model.prepare_audio_inputs(audio_embeds=audio_embeddings, audio_embeds_attention_mask=attention_mask)
@@ -39,5 +40,17 @@ def test_tokenized_speech_lm():
     expected_seq_len = seq_len + 2 # extra bos and eos tokens
     assert outputs.logits.shape == torch.Size([1, expected_seq_len, lm_decoder.config.vocab_size])
 
-def test_tokenized_speech_lm_with_dataset():
-    pass
+def test_aslm_save_load_pretrained():
+
+    model, hubert, lm_decoder = _prepare_model()
+
+    tempdir_name = tempfile.TemporaryDirectory()
+    model.save_pretrained(tempdir_name.name, safe_serialization=True)
+
+    model_restored = AslmModel.from_pretrained(tempdir_name.name, hubert, lm_decoder, use_safetensors=True)
+
+    model_state_dict = model.state_dict()
+    assert set(model_restored.state_dict().keys()) == set(model_state_dict.keys())
+
+    for k, v in model_restored.state_dict().items():
+        assert (model_state_dict[k] == v).all(), f'{k} mismatch'

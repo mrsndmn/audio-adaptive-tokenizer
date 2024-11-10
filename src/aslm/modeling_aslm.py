@@ -5,6 +5,7 @@ import torch.nn.functional as F
 
 from aslm.configuration_aslm import AslmConfig, AudioEncoderType, SegmentProjectionEnum
 
+import safetensors
 from transformers import PreTrainedModel
 
 class AudioEmbeddingsEncoderPooling(nn.Module):
@@ -25,7 +26,6 @@ class AudioEmbeddingsEncoderPooling(nn.Module):
         self.scale = nn.Parameter(torch.tensor([1.0]))
 
     def forward(self, inputs_embeds, encoder_attention_mask):
-
         projected_inputs = self.l_in(inputs_embeds)
         transformer_encoder_outputs = self.transformer_encoder(
             src=projected_inputs,
@@ -42,6 +42,8 @@ class AudioEmbeddingsEncoderPooling(nn.Module):
 class AslmModel(PreTrainedModel):
 
     config_class = AslmConfig
+
+    _keys_to_ignore_on_load_missing = [r"audio_encoder", r"lm_decoder"]
 
     def __init__(self, config: AslmConfig, audio_encoder, lm_decoder):
         super().__init__(config)
@@ -101,6 +103,7 @@ class AslmModel(PreTrainedModel):
 
         """
 
+        # todo move this cases to projection class logic
         if self.config.audio_encoder_type == AudioEncoderType.hubert:
             with torch.no_grad():
                 ae_waveform = waveform
@@ -131,6 +134,7 @@ class AslmModel(PreTrainedModel):
 
 
     def audio_embeddings_projection(self, audio_hidden_states, embeddings_attention_mask):
+        # todo move this cases to projection class logic
         if self.config.projection_type == SegmentProjectionEnum.transformer_encoder:
             raise NotImplementedError
         elif self.config.projection_type == SegmentProjectionEnum.mean:
@@ -211,13 +215,10 @@ class AslmModel(PreTrainedModel):
                 audio_tokens_labels_mask = torch.ones([bath_size, 1], device=audio_embeds_projection.device)
                 attention_mask = torch.cat([audio_tokens_labels_mask, audio_embeds_attention_mask, audio_tokens_labels_mask], dim=1)
 
-
         return {
             "inputs_embeds":  inputs_embeds,
             "attention_mask": attention_mask,
         }
-
-
 
     def forward(self, input_ids=None, inputs_embeds=None, attention_mask=None, output_attentions=None):
 
@@ -232,43 +233,27 @@ class AslmModel(PreTrainedModel):
     def encode_text(self, input_ids=None):
         return self.lm_decoder.model.embed_tokens(input_ids)
 
-    def save_pretrained(self, save_directory: str):
-        if os.path.isfile(save_directory):
-            raise ValueError(f"Provided path ({save_directory}) should be a directory, not a file")
+    def _prefixed_state_dict(self, key_prefix, state_dict):
+        return { key_prefix + '.' + k: v for k, v in state_dict.items() }
 
-        os.makedirs(save_directory, exist_ok=True)
+    def save_pretrained(self, *args, **kwargs):
+        state_dict_filtered = { k: v for k, v in self.state_dict().items() if not k.startswith('lm_decoder.') and not k.startswith('audio_encoder.') }
 
-        torch.save(self.audio_tokens_embeddings.state_dict(), os.path.join(save_directory, "audio_tokens_embeddings.pt"))
+        kwargs['safe_serialization'] = True
 
-        if hasattr(self, 'audio_embeddings_pooling'):
-            torch.save(self.audio_embeddings_pooling.state_dict(), os.path.join(save_directory, "audio_embeddings_pooling.pt"))
+        return super().save_pretrained(*args, state_dict=state_dict_filtered, **kwargs)
 
-        if hasattr(self, 'audio_encoder_projection'):
-            torch.save(self.audio_encoder_projection.state_dict(), os.path.join(save_directory, "audio_encoder_projection.pt"))
+    # # TODO Fix HF from_pretraining
+    # @classmethod
+    # def from_pretrained(cls, pretrained_model_name_or_path, *model_args):
+    #     config = cls.config_class.from_pretrained(pretrained_model_name_or_path)
+    #     model = cls(config, *model_args)
 
-        self.lm_decoder.save_pretrained(save_directory)
-        # self.config.save_pretrained(save_directory)
+    #     model_state_loaded = {}
+    #     model_weights_path = os.path.join(pretrained_model_name_or_path, "model.safetensors")
+    #     with safetensors.safe_open(model_weights_path, framework="pt", device=0) as f:
+    #         for k in f.keys():
+    #             model_state_loaded[k] = f.get_tensor(k)
+    #     model.load_state_dict(model_state_loaded, strict=False)
 
-        return
-
-    @classmethod
-    def from_pretrained(cls, audio_encoder, lm_model, projection_type, audio_encoder_type, hubert_embeddings_length_for_longest_audio_segment, model_id: str):
-        print("load AslmModel from", model_id)
-
-        model = cls(audio_encoder, lm_model, projection_type=projection_type, audio_encoder_type=audio_encoder_type, hubert_embeddings_length_for_longest_audio_segment=hubert_embeddings_length_for_longest_audio_segment)
-
-        audio_tokens_embeddings_path = os.path.join(model_id, "audio_tokens_embeddings.pt")
-        audio_tokens_embeddings_state = torch.load(audio_tokens_embeddings_path, map_location=torch.device('cpu'))
-        model.audio_tokens_embeddings.load_state_dict(audio_tokens_embeddings_state)
-
-        if hasattr(model, 'audio_embeddings_pooling'):
-            audio_embeddings_pooling_state_dict_path = os.path.join(model_id, "audio_embeddings_pooling.pt")
-            audio_embeddings_pooling_state_dict = torch.load(audio_embeddings_pooling_state_dict_path, map_location=torch.device('cpu'))
-            model.audio_embeddings_pooling.load_state_dict(audio_embeddings_pooling_state_dict)
-
-        if hasattr(model, 'audio_encoder_projection'):
-            audio_encoder_projection_state_dict_path = os.path.join(model_id, "audio_encoder_projection.pt")
-            audio_encoder_projection_state_dict = torch.load(audio_encoder_projection_state_dict_path, map_location=torch.device('cpu'))
-            model.audio_encoder_projection.load_state_dict(audio_encoder_projection_state_dict)
-
-        return model
+    #     return model
