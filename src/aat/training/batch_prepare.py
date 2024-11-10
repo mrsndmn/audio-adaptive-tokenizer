@@ -7,10 +7,10 @@ from tqdm.auto import tqdm
 
 import accelerate
 
-from aat.model import TokenizedSpeechLM
+from aat.model import AslmModel
 from aat.training.config import TrainConfig, SegmentProjectionEnum, SegmentationType
 
-def _inplace_audio_encode_batch_no_segmentation(train_config: TrainConfig, model: TokenizedSpeechLM, batch, device=None):
+def _inplace_audio_encode_batch_no_segmentation(train_config: TrainConfig, model: AslmModel, batch, device=None):
 
     # [ bs, max_segment_waveform_frames ]
     batched_waveforms = batch['waveforms'].to(device)
@@ -19,29 +19,7 @@ def _inplace_audio_encode_batch_no_segmentation(train_config: TrainConfig, model
     # audio_hidden_states ~ [ bs, seq_len, embedding_dim ]
     # embeddings_attention_mask ~ [ bs, seq_len ]
     audio_hidden_states, embeddings_attention_mask = model.encode_audio(batched_waveforms, batched_waveforms_attention_mask)
-
-    if train_config.segment_projection == SegmentProjectionEnum.transformer_encoder:
-        raise NotImplementedError
-    elif train_config.segment_projection == SegmentProjectionEnum.mean:
-        raise NotImplementedError
-    elif train_config.segment_projection == SegmentProjectionEnum.linear:
-        seq_len = audio_hidden_states.shape[1]
-        batch_size = audio_hidden_states.shape[0]
-        cropped_seq_len = seq_len - (seq_len % model.HUBERT_EMBEDDINGS_LENGTH_FOR_LONGEST_AUDIO_SEGMENT)
-        redused_seq_len = cropped_seq_len // model.HUBERT_EMBEDDINGS_LENGTH_FOR_LONGEST_AUDIO_SEGMENT
-        audio_hidden_states_cropped = audio_hidden_states[:, :cropped_seq_len, :]
-        assert audio_hidden_states_cropped.shape[1] > 0
-
-
-        audio_hidden_states_cropped = audio_hidden_states_cropped.reshape(batch_size, redused_seq_len, -1)
-
-        audio_hidden_states = model.audio_encoder_projection(audio_hidden_states_cropped)
-
-        embeddings_attention_mask = embeddings_attention_mask[:, :cropped_seq_len].reshape(batch_size, redused_seq_len, -1).any(dim=-1)
-    else:
-        raise ValueError(f"unsupported segment_projection: {train_config.segment_projection}")
-
-    audio_hidden_states = model.audio_encoder_dropout(audio_hidden_states)
+    audio_hidden_states, embeddings_attention_mask = model.audio_embeddings_projection(audio_hidden_states, embeddings_attention_mask)
 
     assert not audio_hidden_states.isnan().any()
 
@@ -52,8 +30,7 @@ def _inplace_audio_encode_batch_no_segmentation(train_config: TrainConfig, model
     batch['audio_embeds_attention_mask'] = embeddings_attention_mask
 
 
-def _inplace_audio_encode_batch(train_config: TrainConfig, model: TokenizedSpeechLM, batch, device=None):
-
+def _inplace_audio_encode_batch(train_config: TrainConfig, model: AslmModel, batch, device=None):
 
     segments_boarders_padded = batch['segments_boarders_padded']
     segments_boarders_attention_mask = batch['segments_boarders_attention_mask'].to(device) # [ bs, segments_count ]
@@ -125,7 +102,7 @@ def _inplace_audio_encode_batch(train_config: TrainConfig, model: TokenizedSpeec
 
     return
 
-def prepare_model_inputs_from_batch(train_config: TrainConfig, model: TokenizedSpeechLM, batch, device=None):
+def prepare_model_inputs_from_batch(train_config: TrainConfig, model: AslmModel, batch, device=None):
 
     if train_config.segmentation == SegmentationType.none:
         _inplace_audio_encode_batch_no_segmentation(train_config, model, batch, device=device)

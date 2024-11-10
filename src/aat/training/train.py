@@ -11,11 +11,11 @@ import accelerate
 
 from datasets import IterableDataset
 
-from aat.model import TokenizedSpeechLM
+from aat.model import AslmModel
 from aat.training.config import TrainConfig
 from aat.training.batch_prepare import prepare_model_inputs_from_batch
 
-def train_loop(accelerator: accelerate.Accelerator, train_config: TrainConfig, model: TokenizedSpeechLM, optimizer, optimizer_lr_scheduler, train_dataloader: DataLoader, epoch, criterion, last_validation_wer=0.0, device=None):
+def train_loop(accelerator: accelerate.Accelerator, train_config: TrainConfig, model: AslmModel, optimizer, optimizer_lr_scheduler, train_dataloader: DataLoader, epoch, criterion, last_validation_wer=0.0, device=None):
     model.train()
     progress_bar = tqdm(train_dataloader, desc=f'Epoch {epoch}')
 
@@ -26,9 +26,6 @@ def train_loop(accelerator: accelerate.Accelerator, train_config: TrainConfig, m
     for batch_i, batch in enumerate(train_dataloader):
         with accelerator.accumulate(model):
             model_inputs_with_audio = prepare_model_inputs_from_batch(train_config, model, batch, device=device)
-
-            if train_config.debug_attentions:
-                model_inputs_with_audio['output_attentions'] = True
 
             model_prediction = model.forward(**model_inputs_with_audio)
 

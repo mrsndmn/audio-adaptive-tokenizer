@@ -13,20 +13,6 @@ class DeviceEnum(str, Enum):
     cuda = "cuda"
     cpu  = "cpu"
 
-class SegmentProjectionEnum(str, Enum):
-    transformer_encoder  = "transformer_encoder"
-    mean = "mean"
-    linear = "linear"
-
-class SegmentationType(str, Enum):
-    none  = "none"
-    uniform  = "uniform"
-    adaptive = "adaptive"
-
-class AudioEncoderType(str, Enum):
-    hubert  = "hubert"
-    speechTokenizer = "speechTokenizer"
-
 
 
 class BaseExperiment(BaseModel):
@@ -62,25 +48,15 @@ class TrainConfig(BaseExperiment):
     no_validation: bool = False
 
     sampling_rate: int = 16000
-    max_segment_waveform_frames: int = 4000
 
-    # Model
-    audio_encoder_type: AudioEncoderType
+    # Model TODO
     audio_encoder_pretrained_model: str = "facebook/hubert-large-ls960-ft"
     lm_pretrained_model: str = "HuggingFaceTB/SmolLM-135M-Instruct"
-    from_pretrained: Optional[str]
-
     lm_flash_attention: bool = False
     optim_lm: bool = True
     unfreeze_lm_at_epoch: Optional[int]
     optim_audio_encoder: bool = False
 
-    # Model debug
-    debug_attentions: bool = False
-
-    # Segmentation
-    segmentation: SegmentationType
-    uniform_segmentation_frames_per_segment: Optional[int]
 
     # Data
     few_train_samples: Optional[int] = 100
@@ -205,10 +181,10 @@ def finetuning_lm():
 
     return TrainConfig(
         num_epochs = 5,
-        train_batch_size = 15,
+        train_batch_size = 30,
         val_batch_size = 5,
         learning_rate = 2e-4,
-        gradient_accumulation_steps = 4,
+        gradient_accumulation_steps = 2,
 
         evaluate_every_epoch_mod = 1,
         save_model_every_epoch_mod = 1,

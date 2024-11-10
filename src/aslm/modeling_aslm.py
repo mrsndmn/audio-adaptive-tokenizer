@@ -3,9 +3,11 @@ import torch
 import torch.nn as nn
 import torch.nn.functional as F
 
-from aat.training.config import SegmentProjectionEnum, AudioEncoderType
+from aslm.configuration_aslm import AslmConfig, AudioEncoderType, SegmentProjectionEnum
 
-class AudioEmbeddingsPooling(nn.Module):
+from transformers import PreTrainedModel
+
+class AudioEmbeddingsEncoderPooling(nn.Module):
     def __init__(self, embedding_dim=512, nhead=16):
         super().__init__()
 
@@ -37,48 +39,32 @@ class AudioEmbeddingsPooling(nn.Module):
         return pooler_output
 
 
-class TokenizedSpeechLM(nn.Module):
+class AslmModel(PreTrainedModel):
 
-    start_audio_token_id = 0
-    end_audio_token_id = 1
+    config_class = AslmConfig
 
-    def __init__(self, audio_encoder, lm_decoder, projection_type: SegmentProjectionEnum, audio_encoder_type: AudioEncoderType, hubert_embeddings_length_for_longest_audio_segment):
-        super().__init__()
-
-        self.audio_encoder_type = audio_encoder_type
+    def __init__(self, config: AslmConfig, audio_encoder, lm_decoder):
+        super().__init__(config)
 
         self.audio_encoder = audio_encoder
+        audio_encoder_hidden_size = audio_encoder.config.hidden_size
 
-        self.audio_embeddings_scale = nn.Parameter(torch.tensor([1.0]))
+        assert config.audio_encoder_type == AudioEncoderType.hubert, 'only hubert audio encoder type is supported'
 
-        # Используется только для SpeechTokenizer, чтобы получить векторные представления из дискретных кодов
-        if audio_encoder_type == AudioEncoderType.speechTokenizer:
-            self.embeddings_count = audio_encoder.quantizer.bins + 1
-            self.audio_encoder_embeddings = nn.Embedding(self.embeddings_count, lm_decoder.config.hidden_size)
+        if config.projection_type == SegmentProjectionEnum.transformer_encoder:
+            self.audio_embeddings_pooling = AudioEmbeddingsEncoderPooling()
+        elif config.projection_type == SegmentProjectionEnum.linear:
+            linear_features = audio_encoder_hidden_size * config.hubert_embeddings_length_for_longest_audio_segment
 
-        if projection_type == SegmentProjectionEnum.transformer_encoder:
-            self.audio_embeddings_pooling = AudioEmbeddingsPooling()
-        elif projection_type == SegmentProjectionEnum.linear:
-            WAV_TOKENIZER_CODES_LENGTH_FOR_LONGEST_AUDIO_SEGMENT = 13
-            WAV_TOKENIZER_CODES_LENGTH_FOR_LONGEST_AUDIO_SEGMENT = 5 # max_segment_waveform_frames == 1600
-            # linear_features = lm_decoder.config.hidden_size * WAV_TOKENIZER_CODES_LENGTH_FOR_LONGEST_AUDIO_SEGMENT
-            # HUBERT_EMBEDDINGS_LENGTH_FOR_LONGEST_AUDIO_SEGMENT = 24 # max_segment_waveform_frames == 1600
-            HUBERT_EMBEDDINGS_LENGTH_FOR_LONGEST_AUDIO_SEGMENT = hubert_embeddings_length_for_longest_audio_segment
-            linear_features = 1024 * HUBERT_EMBEDDINGS_LENGTH_FOR_LONGEST_AUDIO_SEGMENT
-
-            self.HUBERT_EMBEDDINGS_LENGTH_FOR_LONGEST_AUDIO_SEGMENT = HUBERT_EMBEDDINGS_LENGTH_FOR_LONGEST_AUDIO_SEGMENT
-
-            # assert train_config.max_segment_waveform_frames == 4000, "WAV_TOKENIZER_CODES_LENGTH_FOR_LONGEST_AUDIO_SEGMENT relies on that"
             self.audio_encoder_projection = nn.Sequential(
                 nn.Linear(linear_features, 4096),
                 nn.ReLU(),
                 nn.Linear(4096, lm_decoder.config.hidden_size),
             )
-        elif projection_type == SegmentProjectionEnum.mean:
+        elif config.projection_type == SegmentProjectionEnum.mean:
             # no special parameters
-            linear_features = 1024 # hubert embedding dim
+            linear_features = audio_encoder_hidden_size # hubert embedding dim
             self.audio_encoder_projection = nn.Linear(linear_features, lm_decoder.config.hidden_size)
-            pass
         else:
             raise ValueError("Unhandled projection type:")
 
@@ -86,6 +72,23 @@ class TokenizedSpeechLM(nn.Module):
 
         self.audio_tokens_embeddings = nn.Embedding(2, lm_decoder.config.hidden_size)
         self.lm_decoder = lm_decoder
+
+        return
+
+    def reinitialize_weights(self, std=0.02):
+        nn.init.normal_(self.audio_tokens_embeddings.weight, mean=0, std=std)
+
+        if hasattr(self, 'audio_embeddings_pooling'):
+            nn.init.normal_(self.audio_embeddings_pooling.l_in.weight, mean=0, std=std)
+            nn.init.normal_(self.audio_embeddings_pooling.l_out.weight, mean=0, std=std)
+
+        if hasattr(self, 'audio_encoder_projection'):
+            if isinstance(self.audio_encoder_projection, nn.Linear):
+                nn.init.normal_(self.audio_encoder_projection.weight, mean=0, std=std)
+            if isinstance(self.audio_encoder_projection, nn.Sequential):
+                for layer in self.audio_encoder_projection:
+                    if isinstance(layer, nn.Linear):
+                        nn.init.normal_(layer.weight, mean=0, std=std)
 
         return
 
@@ -97,29 +100,8 @@ class TokenizedSpeechLM(nn.Module):
             waveforms_mask (Tensor) [ bs * segments_count, max_segment_waveform_frames ]: Padding mask for segments
 
         """
-        if self.audio_encoder_type == AudioEncoderType.speechTokenizer:
-            with torch.no_grad():
-                audio_codes = self.audio_encoder.encode(
-                    waveform.unsqueeze(1),
-                    n_q=1,
-                )
 
-            # [ bs * segments_count, seq_len ]
-            audio_codes = audio_codes.squeeze(0)
-
-            # [ bs * segments_count, max_segment_waveform_frames ]
-            compression_factor = waveform.shape[-1] / audio_codes.shape[-1]
-            compressed_seq_lengths = torch.round(waveforms_mask.sum(dim=-1) / compression_factor).to(torch.long)
-
-            assert (compressed_seq_lengths != 0).any()
-
-            # [ bs * segments_count, seq_len ]
-            embeddings_attention_mask = torch.arange(audio_codes.shape[-1], dtype=torch.long, device=waveforms_mask.device).unsqueeze(0).repeat(audio_codes.shape[0], 1)
-            embeddings_attention_mask = (embeddings_attention_mask < compressed_seq_lengths.unsqueeze(1)).long()
-
-            audio_hidden_states = self.audio_encoder_embeddings(audio_codes)
-
-        elif self.audio_encoder_type == AudioEncoderType.hubert:
+        if self.config.audio_encoder_type == AudioEncoderType.hubert:
             with torch.no_grad():
                 ae_waveform = waveform
                 if self.audio_encoder.dtype != ae_waveform.dtype:
@@ -148,42 +130,31 @@ class TokenizedSpeechLM(nn.Module):
         return audio_hidden_states, embeddings_attention_mask
 
 
-    def reinitialize_weights(self, std=0.02):
-        nn.init.normal_(self.audio_tokens_embeddings.weight, mean=0, std=std)
+    def audio_embeddings_projection(self, audio_hidden_states, embeddings_attention_mask):
+        if self.config.projection_type == SegmentProjectionEnum.transformer_encoder:
+            raise NotImplementedError
+        elif self.config.projection_type == SegmentProjectionEnum.mean:
+            raise NotImplementedError
+        elif self.config.projection_type == SegmentProjectionEnum.linear:
+            seq_len = audio_hidden_states.shape[1]
+            batch_size = audio_hidden_states.shape[0]
+            cropped_seq_len = seq_len - (seq_len % self.config.hubert_embeddings_length_for_longest_audio_segment)
+            redused_seq_len = cropped_seq_len // self.config.hubert_embeddings_length_for_longest_audio_segment
+            audio_hidden_states_cropped = audio_hidden_states[:, :cropped_seq_len, :]
+            assert audio_hidden_states_cropped.shape[1] > 0
 
-        if hasattr(self, 'audio_encoder_embeddings'):
-            nn.init.normal_(self.audio_encoder_embeddings.weight, mean=0, std=std)
 
-        if hasattr(self, 'audio_embeddings_pooling'):
-            nn.init.normal_(self.audio_embeddings_pooling.l_in.weight, mean=0, std=std)
-            nn.init.normal_(self.audio_embeddings_pooling.l_out.weight, mean=0, std=std)
+            audio_hidden_states_cropped = audio_hidden_states_cropped.reshape(batch_size, redused_seq_len, -1)
 
-        if hasattr(self, 'audio_encoder_projection'):
-            if isinstance(self.audio_encoder_projection, nn.Linear):
-                nn.init.normal_(self.audio_encoder_projection.weight, mean=0, std=std)
-            if isinstance(self.audio_encoder_projection, nn.Sequential):
-                for layer in self.audio_encoder_projection:
-                    if isinstance(layer, nn.Linear):
-                        nn.init.normal_(layer.weight, mean=0, std=std)
+            audio_hidden_states = self.audio_encoder_projection(audio_hidden_states_cropped)
 
-        return
+            embeddings_attention_mask = embeddings_attention_mask[:, :cropped_seq_len].reshape(batch_size, redused_seq_len, -1).any(dim=-1)
+        else:
+            raise ValueError(f"unsupported projection_type: {self.config.projection_type}")
 
-    def prepare_audio_embeddings(self, audio_embeds):
-        # no op
-        return audio_embeds
+        audio_hidden_states = self.audio_encoder_dropout(audio_hidden_states)
 
-    def forward(self, input_ids=None, inputs_embeds=None, attention_mask=None, output_attentions=None):
-
-        if inputs_embeds.dtype != self.lm_decoder.dtype:
-            inputs_embeds = inputs_embeds.to(self.lm_decoder.dtype)
-
-        assert inputs_embeds.shape[0] == attention_mask.shape[0]
-        assert inputs_embeds.shape[1] == attention_mask.shape[1]
-
-        return self.lm_decoder.forward(input_ids=input_ids, inputs_embeds=inputs_embeds, attention_mask=attention_mask, output_attentions=output_attentions)
-
-    def encode_text(self, input_ids=None):
-        return self.lm_decoder.model.embed_tokens(input_ids)
+        return audio_hidden_states, embeddings_attention_mask
 
     def prepare_audio_inputs(self, input_ids=None, inputs_embeds=None, audio_embeds=None, attention_mask=None, audio_embeds_attention_mask=None):
 
@@ -198,13 +169,13 @@ class TokenizedSpeechLM(nn.Module):
         if audio_embeds is None:
             raise Exception("no audio embeds")
 
-        audio_embeds_projection = self.prepare_audio_embeddings(audio_embeds)
+        audio_embeds_projection, audio_embeds_attention_mask = self.audio_embeddings_projection(audio_hidden_states=audio_embeds, embeddings_attention_mask=audio_embeds_attention_mask)
 
         bath_size = audio_embeds_projection.shape[0]
 
         audio_start_end_tokens = torch.ones([bath_size, 2], device=audio_embeds_projection.device, dtype=torch.long)
-        audio_start_end_tokens[:, 0] = audio_start_end_tokens[:, 0] * self.start_audio_token_id
-        audio_start_end_tokens[:, 1] = audio_start_end_tokens[:, 1] * self.end_audio_token_id
+        audio_start_end_tokens[:, 0] = audio_start_end_tokens[:, 0] * self.config.bos_token_id
+        audio_start_end_tokens[:, 1] = audio_start_end_tokens[:, 1] * self.config.eos_token_id
 
         audio_start_end_embeddings = self.audio_tokens_embeddings(audio_start_end_tokens)
 
@@ -247,6 +218,20 @@ class TokenizedSpeechLM(nn.Module):
         }
 
 
+
+    def forward(self, input_ids=None, inputs_embeds=None, attention_mask=None, output_attentions=None):
+
+        if inputs_embeds.dtype != self.lm_decoder.dtype:
+            inputs_embeds = inputs_embeds.to(self.lm_decoder.dtype)
+
+        assert inputs_embeds.shape[0] == attention_mask.shape[0]
+        assert inputs_embeds.shape[1] == attention_mask.shape[1]
+
+        return self.lm_decoder.forward(input_ids=input_ids, inputs_embeds=inputs_embeds, attention_mask=attention_mask, output_attentions=output_attentions)
+
+    def encode_text(self, input_ids=None):
+        return self.lm_decoder.model.embed_tokens(input_ids)
+
     def save_pretrained(self, save_directory: str):
         if os.path.isfile(save_directory):
             raise ValueError(f"Provided path ({save_directory}) should be a directory, not a file")
@@ -254,10 +239,6 @@ class TokenizedSpeechLM(nn.Module):
         os.makedirs(save_directory, exist_ok=True)
 
         torch.save(self.audio_tokens_embeddings.state_dict(), os.path.join(save_directory, "audio_tokens_embeddings.pt"))
-        torch.save(self.audio_embeddings_scale, os.path.join(save_directory, "audio_embeddings_scale.pt"))
-
-        if hasattr(self, 'audio_encoder_embeddings'):
-            torch.save(self.audio_encoder_embeddings.state_dict(), os.path.join(save_directory, "audio_encoder_embeddings.pt"))
 
         if hasattr(self, 'audio_embeddings_pooling'):
             torch.save(self.audio_embeddings_pooling.state_dict(), os.path.join(save_directory, "audio_embeddings_pooling.pt"))
@@ -272,22 +253,13 @@ class TokenizedSpeechLM(nn.Module):
 
     @classmethod
     def from_pretrained(cls, audio_encoder, lm_model, projection_type, audio_encoder_type, hubert_embeddings_length_for_longest_audio_segment, model_id: str):
-        print("load TokenizedSpeechLM from", model_id)
+        print("load AslmModel from", model_id)
 
         model = cls(audio_encoder, lm_model, projection_type=projection_type, audio_encoder_type=audio_encoder_type, hubert_embeddings_length_for_longest_audio_segment=hubert_embeddings_length_for_longest_audio_segment)
 
         audio_tokens_embeddings_path = os.path.join(model_id, "audio_tokens_embeddings.pt")
         audio_tokens_embeddings_state = torch.load(audio_tokens_embeddings_path, map_location=torch.device('cpu'))
         model.audio_tokens_embeddings.load_state_dict(audio_tokens_embeddings_state)
-
-        audio_embeddings_scale_path = os.path.join(model_id, "audio_embeddings_scale.pt")
-        audio_embeddings_scale = torch.load(audio_embeddings_scale_path, map_location=torch.device('cpu'))
-        model.audio_embeddings_scale = audio_embeddings_scale
-
-        if hasattr(model, 'audio_encoder_embeddings'):
-            audio_encoder_embeddings_state_dict_path = os.path.join(model_id, "audio_encoder_embeddings.pt")
-            audio_encoder_embeddings_state_dict = torch.load(audio_encoder_embeddings_state_dict_path, map_location=torch.device('cpu'))
-            model.audio_encoder_embeddings.load_state_dict(audio_encoder_embeddings_state_dict)
 
         if hasattr(model, 'audio_embeddings_pooling'):
             audio_embeddings_pooling_state_dict_path = os.path.join(model_id, "audio_embeddings_pooling.pt")

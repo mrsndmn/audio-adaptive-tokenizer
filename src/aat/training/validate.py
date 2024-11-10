@@ -10,7 +10,7 @@ from transformers import GenerationConfig
 
 from aat.training.config import TrainConfig
 from aat.training.evaluate import compute_validation_metrics
-from aat.model import TokenizedSpeechLM
+from aat.model import AslmModel
 
 from aat.training.batch_prepare import prepare_model_inputs_from_batch
 
@@ -19,7 +19,7 @@ logging.basicConfig(level=logging.INFO, format='%(asctime)s %(levelname)s %(mess
 
 
 @torch.no_grad()
-def val_loop(train_config: TrainConfig, model: TokenizedSpeechLM, tokenizer, val_dataloader: DataLoader, epoch, no_loss=False, device=None, wer_compute=None, captioning_metrics=None):
+def val_loop(train_config: TrainConfig, model: AslmModel, tokenizer, val_dataloader: DataLoader, epoch, no_loss=False, device=None, wer_compute=None, captioning_metrics=None):
     if train_config.no_validation:
         return {}
 
@@ -94,6 +94,9 @@ def val_loop(train_config: TrainConfig, model: TokenizedSpeechLM, tokenizer, val
             all_generation_params['inputs_embeds'] = all_generation_params['inputs_embeds'].to(model.lm_decoder.dtype)
 
         model_generation = model.lm_decoder.generate(**all_generation_params)
+
+        # todo
+
         generated_sentences = tokenizer.batch_decode(model_generation, skip_special_tokens=True)
         for sentence in generated_sentences:
             sentence: str

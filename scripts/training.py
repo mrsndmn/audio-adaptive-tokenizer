@@ -8,19 +8,20 @@ import torch
 import torch.nn as nn
 from torch.amp import autocast
 
+from typing import Optional
+
 import logging
 import evaluate
 
 import datasets
 
-from torch.optim import Adam, AdamW
 from torch.utils.data import DataLoader
 import transformers
 from transformers import AutoTokenizer, LlamaForCausalLM, HubertModel
 
 import accelerate
 
-from aat.model import TokenizedSpeechLM
+from aat.model import AslmModel
 from torch.optim.lr_scheduler import CyclicLR
 
 from speechtokenizer import SpeechTokenizer
@@ -42,11 +43,75 @@ from transformers.trainer import (
     ALL_LAYERNORM_LAYERS,
 )
 
+from dataclasses import dataclass, field
+
+@dataclass
+class ModelArguments:
+    model_name_or_path: Optional[str] = field(default="facebook/opt-125m")
+    version: Optional[str] = field(default="v0")
+    freeze_backbone: bool = field(default=False)
+    tune_mm_mlp_adapter: bool = field(default=False)
+    vision_tower: Optional[str] = field(default=None)
+    mm_vision_select_layer: Optional[int] = field(default=-1)   # default to the last layer
+    pretrain_mm_mlp_adapter: Optional[str] = field(default=None)
+    mm_projector_type: Optional[str] = field(default='linear')
+    mm_use_im_start_end: bool = field(default=False)
+    mm_use_im_patch_token: bool = field(default=True)
+    mm_patch_merge_type: Optional[str] = field(default='flat')
+    mm_vision_select_feature: Optional[str] = field(default="patch")
+
+
+@dataclass
+class DataArguments:
+    data_path: str = field(default=None,
+                           metadata={"help": "Path to the training data."})
+    lazy_preprocess: bool = False
+    is_multimodal: bool = False
+    image_folder: Optional[str] = field(default=None)
+    image_aspect_ratio: str = 'square'
+
+
+@dataclass
+class TrainingArguments(transformers.TrainingArguments):
+    cache_dir: Optional[str] = field(default=None)
+    optim: str = field(default="adamw_torch")
+    remove_unused_columns: bool = field(default=False)
+    freeze_mm_mlp_adapter: bool = field(default=False)
+    mpt_attn_impl: Optional[str] = field(default="triton")
+    model_max_length: int = field(
+        default=512,
+        metadata={
+            "help": "Maximum sequence length. Sequences will be right padded (and possibly truncated)."
+        },
+    )
+    double_quant: bool = field(
+        default=True,
+        metadata={"help": "Compress the quantization statistics through double quantization."}
+    )
+    quant_type: str = field(
+        default="nf4",
+        metadata={"help": "Quantization data type to use. Should be one of `fp4` or `nf4`."}
+    )
+    bits: int = field(
+        default=16,
+        metadata={"help": "How many bits to use."}
+    )
+    lora_enable: bool = False
+    lora_r: int = 64
+    lora_alpha: int = 16
+    lora_dropout: float = 0.05
+    lora_weight_path: str = ""
+    lora_bias: str = "none"
+
+    mm_projector_lr: Optional[float] = None
+    group_by_modality_length: bool = field(default=False)
+
+
 logger = logging.getLogger(__name__)
 logging.basicConfig(level=logging.INFO, format='%(asctime)s %(levelname)s %(message)s')
 
 
-def save_model(train_config: TrainConfig, model: TokenizedSpeechLM, path: pathlib.Path):
+def save_model(train_config: TrainConfig, model: AslmModel, path: pathlib.Path):
     path.mkdir(parents=True, exist_ok=True)
     logger.info(f"save model to {path}")
 
@@ -56,7 +121,7 @@ def save_model(train_config: TrainConfig, model: TokenizedSpeechLM, path: pathli
 
 
 def train(
-        model: TokenizedSpeechLM,
+        model: AslmModel,
         tokenizer: transformers.AutoTokenizer,
         train_dataloader: DataLoader,
         val_dataloader: DataLoader,
@@ -68,26 +133,6 @@ def train(
         finetuning=False,
         ):
 
-    decay_parameters = get_parameter_names(model, ALL_LAYERNORM_LAYERS)
-    decay_parameters = [name for name in decay_parameters if "bias" not in name]
-    optimizer_grouped_parameters = [
-        {
-            "params": [
-                p for n, p in model.named_parameters() if (n in decay_parameters and p.requires_grad)
-            ],
-            "weight_decay": 0.1,
-        },
-        {
-            "params": [
-                p for n, p in model.named_parameters() if (n not in decay_parameters and p.requires_grad)
-            ],
-            "weight_decay": 0.0,
-        },
-    ]
-    if finetuning:
-        optimizer = Adafactor(optimizer_grouped_parameters, lr=train_config.learning_rate, relative_step=False)
-    else:
-        optimizer = AdamW(optimizer_grouped_parameters, lr=train_config.learning_rate)
 
     approximate_max_steps = (len(train_dataloader.dataset) // train_dataloader.batch_size) * train_config.num_epochs
     logger.info(f"approximate_max_steps={approximate_max_steps}")
@@ -202,10 +247,10 @@ def build_model(train_config: TrainConfig, from_pretrained=None, device=None):
     if from_pretrained is not None:
         lm_decoder = build_lm_decoder(train_config, from_pretrained=from_pretrained, device=device)
 
-        model = TokenizedSpeechLM.from_pretrained(audio_encoder, lm_decoder, projection_type=train_config.segment_projection, audio_encoder_type=train_config.audio_encoder_type, hubert_embeddings_length_for_longest_audio_segment=train_config.hubert_embeddings_length_for_longest_audio_segment,  model_id=from_pretrained)
+        model = AslmModel.from_pretrained(audio_encoder, lm_decoder, projection_type=train_config.segment_projection, audio_encoder_type=train_config.audio_encoder_type, hubert_embeddings_length_for_longest_audio_segment=train_config.hubert_embeddings_length_for_longest_audio_segment,  model_id=from_pretrained)
     else:
         lm_decoder = build_lm_decoder(train_config, from_pretrained=train_config.lm_pretrained_model, device=device)
-        model = TokenizedSpeechLM(audio_encoder, lm_decoder, projection_type=train_config.segment_projection, audio_encoder_type=train_config.audio_encoder_type, hubert_embeddings_length_for_longest_audio_segment=train_config.hubert_embeddings_length_for_longest_audio_segment)
+        model = AslmModel(audio_encoder, lm_decoder, projection_type=train_config.segment_projection, audio_encoder_type=train_config.audio_encoder_type, hubert_embeddings_length_for_longest_audio_segment=train_config.hubert_embeddings_length_for_longest_audio_segment)
 
         model.reinitialize_weights()
 
