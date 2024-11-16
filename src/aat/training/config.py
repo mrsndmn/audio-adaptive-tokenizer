@@ -13,7 +13,7 @@ class DeviceEnum(str, Enum):
     cuda = "cuda"
     cpu  = "cpu"
 
-
+from aslm.configuration_aslm import AudioEncoderType, SegmentProjectionEnum, SegmentationType
 
 class BaseExperiment(BaseModel):
     model_config = ConfigDict(extra="forbid")
@@ -57,7 +57,6 @@ class TrainConfig(BaseExperiment):
     unfreeze_lm_at_epoch: Optional[int]
     optim_audio_encoder: bool = False
 
-
     # Data
     few_train_samples: Optional[int] = 100
     few_val_samples: int = 1
@@ -72,19 +71,11 @@ class TrainConfig(BaseExperiment):
     validation_dataset_path: str
 
     segment_projection: SegmentProjectionEnum
-    segment_boarders_noize: bool = False
 
     @model_validator(mode='after')
     def validate_different_datasets(self):
         if self.train_dataset_path == self.validation_dataset_path:
             raise ValueError("Datasets must not be the same for validation and train")
-
-        if self.segmentation == SegmentationType.uniform:
-            if self.max_segment_waveform_frames != self.uniform_segmentation_frames_per_segment:
-                raise ValueError("For uniform segmentation `uniform_segmentation_frames_per_segment` must be equal to `max_segment_waveform_frames`")
-
-        if self.segmentation == SegmentationType.none and self.segment_boarders_noize:
-            raise ValueError("`segment_boarders_noize` is not available with `segmentation` = `SegmentationType.none`")
 
 
 def overfit_one_batch_train_config():
@@ -102,13 +93,10 @@ def overfit_one_batch_train_config():
         no_validation = False,
 
         sampling_rate = 16000,
-        max_segment_waveform_frames = 8000,
 
         # Model
-        audio_encoder_type = AudioEncoderType.hubert,
         audio_encoder_pretrained_model = "facebook/hubert-large-ls960-ft",
         lm_pretrained_model = "Qwen/Qwen1.5-1.8B",
-        from_pretrained = None,
 
         optim_lm = False,
         lm_flash_attention = True,
@@ -118,7 +106,6 @@ def overfit_one_batch_train_config():
         segment_projection = SegmentProjectionEnum.linear,
         segmentation = SegmentationType.uniform,
         uniform_segmentation_frames_per_segment = 8000,
-        segment_boarders_noize = False,
 
         # Data
         few_train_samples = 10,
@@ -147,14 +134,10 @@ def projection_training():
         no_validation = False,
 
         sampling_rate = 16000,
-        max_segment_waveform_frames = 8000,
 
         # Model
-        audio_encoder_type = AudioEncoderType.hubert,
         audio_encoder_pretrained_model = "facebook/hubert-large-ls960-ft",
         lm_pretrained_model = "Qwen/Qwen1.5-1.8B",
-        from_pretrained = None,
-        hubert_embeddings_length_for_longest_audio_segment = 3,
 
         optim_lm = False,
         lm_flash_attention = True,
@@ -162,9 +145,6 @@ def projection_training():
         optim_audio_encoder = False,
 
         segment_projection = SegmentProjectionEnum.linear,
-        segmentation = SegmentationType.none,
-        uniform_segmentation_frames_per_segment = 8000,
-        segment_boarders_noize = False,
 
         # Data
         few_train_samples = None,
@@ -192,13 +172,10 @@ def finetuning_lm():
         no_validation = False,
 
         sampling_rate = 16000,
-        max_segment_waveform_frames = 8000,
 
         # Model
-        audio_encoder_type = AudioEncoderType.hubert,
         audio_encoder_pretrained_model = "facebook/hubert-large-ls960-ft",
         lm_pretrained_model = "Qwen/Qwen1.5-1.8B",
-        from_pretrained = "data/models/dry-haze-254/epoch-33",
 
         optim_lm = True,
         lm_flash_attention = False,
@@ -208,7 +185,6 @@ def finetuning_lm():
         segment_projection = SegmentProjectionEnum.linear,
         segmentation = SegmentationType.uniform,
         uniform_segmentation_frames_per_segment = 8000,
-        segment_boarders_noize = False,
 
         # Data
         few_train_samples = None,

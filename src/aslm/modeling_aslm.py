@@ -7,6 +7,7 @@ from aslm.configuration_aslm import AslmConfig, AudioEncoderType, SegmentProject
 
 import safetensors
 from transformers import PreTrainedModel
+from transformers.modeling_outputs import BaseModelOutputWithPast
 
 class AudioEmbeddingsEncoderPooling(nn.Module):
     def __init__(self, embedding_dim=512, nhead=16):
@@ -109,56 +110,55 @@ class AslmModel(PreTrainedModel):
                 ae_waveform = waveform
                 if self.audio_encoder.dtype != ae_waveform.dtype:
                     ae_waveform = ae_waveform.to(self.audio_encoder.dtype)
-                audio_hidden_states = self.audio_encoder(
+                audio_embeds = self.audio_encoder(
                     input_values=ae_waveform,
                     attention_mask=waveforms_mask,
                 ).last_hidden_state
 
-                audio_hidden_states = audio_hidden_states.to(torch.float32)
+                audio_embeds = audio_embeds.to(torch.float32)
 
-            embeddings_attention_mask = self.audio_encoder._get_feature_vector_attention_mask(audio_hidden_states.shape[1], waveforms_mask)
+            audio_embeds_attention_mask = self.audio_encoder._get_feature_vector_attention_mask(audio_embeds.shape[1], waveforms_mask)
 
         else:
             raise NotImplementedError
 
-        assert not audio_hidden_states.isnan().any()
+        assert not audio_embeds.isnan().any()
 
-        assert embeddings_attention_mask.shape[1] == audio_hidden_states.shape[1]
-        assert embeddings_attention_mask.shape[0] == audio_hidden_states.shape[0]
+        assert audio_embeds_attention_mask.shape[1] == audio_embeds.shape[1]
+        assert audio_embeds_attention_mask.shape[0] == audio_embeds.shape[0]
 
         # audio_hidden_states[~embeddings_attention_mask] = 0
 
         # audio_hidden_states ~ [ bs * segments_count, seq_len, embedding_dim ]
         # embeddings_attention_mask ~ [ bs * segments_count, seq_len ]
-        return audio_hidden_states, embeddings_attention_mask
+        return audio_embeds, audio_embeds_attention_mask
 
 
-    def audio_embeddings_projection(self, audio_hidden_states, embeddings_attention_mask):
+    def audio_embeddings_projection(self, audio_embeds, audio_embeds_attention_mask):
         # todo move this cases to projection class logic
         if self.config.projection_type == SegmentProjectionEnum.transformer_encoder:
             raise NotImplementedError
         elif self.config.projection_type == SegmentProjectionEnum.mean:
             raise NotImplementedError
         elif self.config.projection_type == SegmentProjectionEnum.linear:
-            seq_len = audio_hidden_states.shape[1]
-            batch_size = audio_hidden_states.shape[0]
+            seq_len = audio_embeds.shape[1]
+            batch_size = audio_embeds.shape[0]
             cropped_seq_len = seq_len - (seq_len % self.config.hubert_embeddings_length_for_longest_audio_segment)
             redused_seq_len = cropped_seq_len // self.config.hubert_embeddings_length_for_longest_audio_segment
-            audio_hidden_states_cropped = audio_hidden_states[:, :cropped_seq_len, :]
+            audio_hidden_states_cropped = audio_embeds[:, :cropped_seq_len, :]
             assert audio_hidden_states_cropped.shape[1] > 0
 
 
             audio_hidden_states_cropped = audio_hidden_states_cropped.reshape(batch_size, redused_seq_len, -1)
 
-            audio_hidden_states = self.audio_encoder_projection(audio_hidden_states_cropped)
-
-            embeddings_attention_mask = embeddings_attention_mask[:, :cropped_seq_len].reshape(batch_size, redused_seq_len, -1).any(dim=-1)
+            audio_embeds = self.audio_encoder_projection(audio_hidden_states_cropped)
+            audio_embeds_attention_mask = audio_embeds_attention_mask[:, :cropped_seq_len].reshape(batch_size, redused_seq_len, -1).any(dim=-1)
         else:
             raise ValueError(f"unsupported projection_type: {self.config.projection_type}")
 
-        audio_hidden_states = self.audio_encoder_dropout(audio_hidden_states)
+        audio_embeds = self.audio_encoder_dropout(audio_embeds)
 
-        return audio_hidden_states, embeddings_attention_mask
+        return audio_embeds, audio_embeds_attention_mask
 
     def prepare_audio_inputs(self, input_ids=None, inputs_embeds=None, audio_embeds=None, attention_mask=None, audio_embeds_attention_mask=None):
 
@@ -173,7 +173,7 @@ class AslmModel(PreTrainedModel):
         if audio_embeds is None:
             raise Exception("no audio embeds")
 
-        audio_embeds_projection, audio_embeds_attention_mask = self.audio_embeddings_projection(audio_hidden_states=audio_embeds, embeddings_attention_mask=audio_embeds_attention_mask)
+        audio_embeds_projection, audio_embeds_attention_mask = self.audio_embeddings_projection(audio_embeds=audio_embeds, audio_embeds_attention_mask=audio_embeds_attention_mask)
 
         bath_size = audio_embeds_projection.shape[0]
 
@@ -218,9 +218,11 @@ class AslmModel(PreTrainedModel):
         return {
             "inputs_embeds":  inputs_embeds,
             "attention_mask": attention_mask,
+            "audio_embeds": audio_embeds_projection,
+            "audio_embeds_attention_mask": audio_embeds_attention_mask,
         }
 
-    def forward(self, input_ids=None, inputs_embeds=None, attention_mask=None, output_attentions=None):
+    def forward(self, input_ids=None, inputs_embeds=None, attention_mask=None, output_attentions=None) -> BaseModelOutputWithPast:
 
         if inputs_embeds.dtype != self.lm_decoder.dtype:
             inputs_embeds = inputs_embeds.to(self.lm_decoder.dtype)
@@ -238,22 +240,6 @@ class AslmModel(PreTrainedModel):
 
     def save_pretrained(self, *args, **kwargs):
         state_dict_filtered = { k: v for k, v in self.state_dict().items() if not k.startswith('lm_decoder.') and not k.startswith('audio_encoder.') }
+        kwargs['state_dict'] = state_dict_filtered
 
-        kwargs['safe_serialization'] = True
-
-        return super().save_pretrained(*args, state_dict=state_dict_filtered, **kwargs)
-
-    # # TODO Fix HF from_pretraining
-    # @classmethod
-    # def from_pretrained(cls, pretrained_model_name_or_path, *model_args):
-    #     config = cls.config_class.from_pretrained(pretrained_model_name_or_path)
-    #     model = cls(config, *model_args)
-
-    #     model_state_loaded = {}
-    #     model_weights_path = os.path.join(pretrained_model_name_or_path, "model.safetensors")
-    #     with safetensors.safe_open(model_weights_path, framework="pt", device=0) as f:
-    #         for k in f.keys():
-    #             model_state_loaded[k] = f.get_tensor(k)
-    #     model.load_state_dict(model_state_loaded, strict=False)
-
-    #     return model
+        return super().save_pretrained(*args, **kwargs)

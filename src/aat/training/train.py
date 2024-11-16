@@ -11,7 +11,8 @@ import accelerate
 
 from datasets import IterableDataset
 
-from aat.model import AslmModel
+from aslm.modeling_aslm import AslmModel
+
 from aat.training.config import TrainConfig
 from aat.training.batch_prepare import prepare_model_inputs_from_batch
 

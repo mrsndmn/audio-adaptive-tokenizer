@@ -1,4 +1,4 @@
-from typing import List
+from typing import List, Optional
 
 import logging
 
@@ -12,14 +12,16 @@ logging.basicConfig(level=logging.INFO, format='%(asctime)s %(levelname)s %(mess
 
 
 @torch.no_grad()
-def compute_validation_metrics(generations: List[str], references: List[List[str]], wer_compute: Metric, captioning_metrics: Metric):
+def compute_validation_metrics(generations: List[str], references: List[List[str]], wer_compute: Optional[Metric]=None, captioning_metrics: Optional[Metric]=None):
 
     wer_references = [ x[0] for x in references ]
 
     logger.info(f"generations {generations}")
     logger.info(f"wer_references {wer_references}")
 
-    wer_score = wer_compute.compute(predictions=generations, references=wer_references)
+    wer_score = 0.0
+    if wer_compute is not None:
+        wer_score = wer_compute.compute(predictions=generations, references=wer_references)
 
     validation_metrics = {
         "validation/wer": wer_score

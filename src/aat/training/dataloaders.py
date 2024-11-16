@@ -15,8 +15,12 @@ logger = logging.getLogger(__name__)
 logging.basicConfig(level=logging.INFO, format='%(asctime)s %(levelname)s %(message)s')
 
 
-def build_collate_fn(train_config: TrainConfig, tokenizer, validation=False):
-    max_segment_duration_milliseconds = int(train_config.max_segment_waveform_frames * 1000 / train_config.sampling_rate)
+def build_collate_fn(train_config: TrainConfig, tokenizer, max_segment_waveform_frames=None, validation=False):
+    
+    if train_config.not_segmented_dataset:
+        return NoSegmentationAudioWaveformCollator(train_config, tokenizer)
+    
+    max_segment_duration_milliseconds = int(max_segment_waveform_frames * 1000 / train_config.sampling_rate)
     audio_tokenizer = AdaptiveAudioAmplitudeTokenizer(
         max_segment_duration_milliseconds=max_segment_duration_milliseconds,
     )

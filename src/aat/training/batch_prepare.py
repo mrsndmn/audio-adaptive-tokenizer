@@ -7,27 +7,8 @@ from tqdm.auto import tqdm
 
 import accelerate
 
-from aat.model import AslmModel
+from aslm.modeling_aslm import AslmModel
 from aat.training.config import TrainConfig, SegmentProjectionEnum, SegmentationType
-
-def _inplace_audio_encode_batch_no_segmentation(train_config: TrainConfig, model: AslmModel, batch, device=None):
-
-    # [ bs, max_segment_waveform_frames ]
-    batched_waveforms = batch['waveforms'].to(device)
-    batched_waveforms_attention_mask = batch['waveforms_attention_mask'].to(device)
-
-    # audio_hidden_states ~ [ bs, seq_len, embedding_dim ]
-    # embeddings_attention_mask ~ [ bs, seq_len ]
-    audio_hidden_states, embeddings_attention_mask = model.encode_audio(batched_waveforms, batched_waveforms_attention_mask)
-    audio_hidden_states, embeddings_attention_mask = model.audio_embeddings_projection(audio_hidden_states, embeddings_attention_mask)
-
-    assert not audio_hidden_states.isnan().any()
-
-    assert audio_hidden_states.shape[0] == embeddings_attention_mask.shape[0]
-    assert audio_hidden_states.shape[1] == embeddings_attention_mask.shape[1]
-
-    batch['audio_embeds_last_hidden_state'] = audio_hidden_states
-    batch['audio_embeds_attention_mask'] = embeddings_attention_mask
 
 
 def _inplace_audio_encode_batch(train_config: TrainConfig, model: AslmModel, batch, device=None):

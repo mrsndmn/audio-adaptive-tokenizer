@@ -10,13 +10,14 @@ from transformers import GenerationConfig
 
 from aat.training.config import TrainConfig
 from aat.training.evaluate import compute_validation_metrics
-from aat.model import AslmModel
+from aslm.modeling_aslm import AslmModel
 
 from aat.training.batch_prepare import prepare_model_inputs_from_batch
 
 logger = logging.getLogger(__name__)
 logging.basicConfig(level=logging.INFO, format='%(asctime)s %(levelname)s %(message)s')
 
+import re
 
 @torch.no_grad()
 def val_loop(train_config: TrainConfig, model: AslmModel, tokenizer, val_dataloader: DataLoader, epoch, no_loss=False, device=None, wer_compute=None, captioning_metrics=None):
@@ -68,15 +69,19 @@ def val_loop(train_config: TrainConfig, model: AslmModel, tokenizer, val_dataloa
 
             sumloss += loss.item()
             num_batches += 1
+            
+        batched_waveforms = batch['waveforms'].to(device=device)
+        batched_waveforms_attention_mask = batch['waveforms_attention_mask'].to(device=device)
 
-        audio_embeds_last_hidden_state = batch['audio_embeds_last_hidden_state'].to(device)
-        audio_embeds_attention_mask = batch['audio_embeds_attention_mask'].to(device)
+        # audio_hidden_states ~ [ bs, seq_len, embedding_dim ]
+        # embeddings_attention_mask ~ [ bs, seq_len ]
+        audio_embeds_last_hidden_state, audio_embeds_attention_mask = model.encode_audio(batched_waveforms, batched_waveforms_attention_mask)
 
         # generations_bos = torch.full([ audio_embeds_last_hidden_state.shape[0], 1 ], tokenizer.bos_token_id, device=device)
         # attention_mask_bos = torch.ones_like(generations_bos)
         model_inputs_with_only_audio = model.prepare_audio_inputs(
-            input_ids=batch['prefix_input_ids'],
-            attention_mask=batch['prefix_attention_mask'],
+            input_ids=batch['prefix_input_ids'].to(device),
+            attention_mask=batch['prefix_attention_mask'].to(device),
             audio_embeds=audio_embeds_last_hidden_state,
             audio_embeds_attention_mask=audio_embeds_attention_mask,
         )
@@ -86,7 +91,8 @@ def val_loop(train_config: TrainConfig, model: AslmModel, tokenizer, val_dataloa
         all_generation_params = {
             'generation_config': genconfig,
             'max_new_tokens': caption_legth,
-            **model_inputs_with_only_audio,
+            'inputs_embeds': model_inputs_with_only_audio['inputs_embeds'],
+            'attention_mask': model_inputs_with_only_audio['attention_mask'],
             **gen_params,
         }
 
@@ -95,18 +101,32 @@ def val_loop(train_config: TrainConfig, model: AslmModel, tokenizer, val_dataloa
 
         model_generation = model.lm_decoder.generate(**all_generation_params)
 
-        # todo
 
+        prefixes_text = tokenizer.batch_decode(batch['prefix_input_ids'], skip_special_tokens=True)
         generated_sentences = tokenizer.batch_decode(model_generation, skip_special_tokens=True)
         for sentence in generated_sentences:
             sentence: str
             sentence = sentence.replace("\n", " ")
+            sentence = sentence.replace("\n", " ")
+            sentence = sentence.strip()
+            sentence = sentence.rstrip()
+            sentence = sentence.lower()
+            
+            sentence = re.sub(r"[^a-z\s\-\d]", "", sentence)
+            
             generations.append(sentence)
 
         all_references = tokenizer.batch_decode(batch['input_ids'], skip_special_tokens=True)
-        for i, reference in enumerate(all_references):
+        for i, (prefix, reference) in enumerate(zip(prefixes_text, all_references)):
             reference: str
+            reference = reference[len(prefix):]
             reference = reference.replace("\n", " ")
+            reference = reference.rstrip()
+            reference = reference.strip()
+            reference = reference.lower()
+
+            reference = re.sub(r"[^a-z\s\-\d]", "", reference)
+
             target_generations.append([ reference ])
 
     assert len(generations) > 0, f"len(generations)={len(generations)}"

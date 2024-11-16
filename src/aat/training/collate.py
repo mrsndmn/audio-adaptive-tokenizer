@@ -260,10 +260,10 @@ class TokenizedAudioWaveformCollator():
 
 class NoSegmentationAudioWaveformCollator():
 
-    def __init__(self, train_config: TrainConfig, tokenizer, sampling_rate: int):
+    def __init__(self, train_config: TrainConfig, tokenizer):
 
         self.train_config = train_config
-        self.sampling_rate = sampling_rate
+        self.sampling_rate = train_config.sampling_rate
 
         self.tokenizer = tokenizer
 

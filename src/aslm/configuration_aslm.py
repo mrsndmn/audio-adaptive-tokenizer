@@ -75,7 +75,7 @@ class AslmConfig(PretrainedConfig):
         self,
         audio_encoder_type: AudioEncoderType = AudioEncoderType.hubert,
         projection_type: SegmentProjectionEnum = SegmentProjectionEnum.linear,
-        hubert_embeddings_length_for_longest_audio_segment: int = 1,
+        hubert_embeddings_length_for_longest_audio_segment: int = 7,
         segmentation: SegmentationType = SegmentationType.none,
         uniform_segmentation_frames_per_segment: Optional[int] = None,
         max_segment_waveform_frames: Optional[int] = None,

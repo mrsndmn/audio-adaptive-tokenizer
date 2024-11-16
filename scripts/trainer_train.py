@@ -19,31 +19,25 @@ from torch.utils.data import DataLoader
 import transformers
 from transformers import AutoTokenizer, LlamaForCausalLM, HubertModel
 
-import accelerate
+from aslm.modeling_aslm import AslmModel
+from aslm.configuration_aslm import AslmConfig
 
-from aat.model import AslmModel
 from torch.optim.lr_scheduler import CyclicLR
 
 from speechtokenizer import SpeechTokenizer
 
-from aat.tokenizer import AdaptiveAudioAmplitudeTokenizer
 
 from aat.training.config import TrainConfig, projection_training, finetuning_lm, AudioEncoderType
-from aat.training.validate import val_loop
-from aat.training.train import train_loop
 from aat.training.dataloaders import build_dataloaders
-from aat.training.optimizers import Adafactor
 
-from aat.lr_scheduler import WarmupLRScheduler
-
-from aat.training.collate import TokenizedAudioWaveformCollator
-
-from transformers.trainer import (
-    get_parameter_names,
-    ALL_LAYERNORM_LAYERS,
-)
+from aat.training.collate import NoSegmentationAudioWaveformCollator
 
 from dataclasses import dataclass, field
+
+from aat.training.trainer import AATTrainer, TrainingArguments
+
+from accelerate.tracking import filter_trackers
+
 
 @dataclass
 class ModelArguments:
@@ -71,40 +65,7 @@ class DataArguments:
     image_aspect_ratio: str = 'square'
 
 
-@dataclass
-class TrainingArguments(transformers.TrainingArguments):
-    cache_dir: Optional[str] = field(default=None)
-    optim: str = field(default="adamw_torch")
-    remove_unused_columns: bool = field(default=False)
-    freeze_mm_mlp_adapter: bool = field(default=False)
-    mpt_attn_impl: Optional[str] = field(default="triton")
-    model_max_length: int = field(
-        default=512,
-        metadata={
-            "help": "Maximum sequence length. Sequences will be right padded (and possibly truncated)."
-        },
-    )
-    double_quant: bool = field(
-        default=True,
-        metadata={"help": "Compress the quantization statistics through double quantization."}
-    )
-    quant_type: str = field(
-        default="nf4",
-        metadata={"help": "Quantization data type to use. Should be one of `fp4` or `nf4`."}
-    )
-    bits: int = field(
-        default=16,
-        metadata={"help": "How many bits to use."}
-    )
-    lora_enable: bool = False
-    lora_r: int = 64
-    lora_alpha: int = 16
-    lora_dropout: float = 0.05
-    lora_weight_path: str = ""
-    lora_bias: str = "none"
 
-    mm_projector_lr: Optional[float] = None
-    group_by_modality_length: bool = field(default=False)
 
 
 logger = logging.getLogger(__name__)
@@ -123,61 +84,41 @@ def save_model(train_config: TrainConfig, model: AslmModel, path: pathlib.Path):
 def train(
         model: AslmModel,
         tokenizer: transformers.AutoTokenizer,
-        train_dataloader: DataLoader,
-        val_dataloader: DataLoader,
         train_config: TrainConfig,
-        device_placement=True,
-        device=None,
-        captioning_metrics=None,
-        wer_compute=None,
+        training_args: TrainingArguments,
         ):
 
 
-    approximate_max_steps = (len(train_dataloader.dataset) // train_dataloader.batch_size) * train_config.num_epochs
-    logger.info(f"approximate_max_steps={approximate_max_steps}")
-    optimizer_lr_scheduler = WarmupLRScheduler(optimizer, warmup_steps=300, max_steps=approximate_max_steps)
+    # TODO LR Scheduler, optimizers
 
     # Иногда pad_token_id == eos_token_id,
     # но мы хотим, чтобы модель умела предсказывать eos_token_id
     # ignore_index=tokenizer.pad_token_id
-    criterion = nn.CrossEntropyLoss()
 
-    accelerator = accelerate.Accelerator(device_placement=device_placement, log_with='wandb')
+    audio_dataset = datasets.load_dataset("nguyenvulebinh/asr-alignment", 'libris')
+    audio_dataset_val = audio_dataset['valid']
+    audio_dataset =  audio_dataset['train']
+    audio_dataset = audio_dataset.shuffle(seed=42)
 
-    accelerator.init_trackers(
-        project_name="tokenized_speech_lm",
-        config=train_config.dict()
+    trainer = AATTrainer(
+        model,
+        training_args,
+        data_collator=NoSegmentationAudioWaveformCollator(train_config, tokenizer),
+        train_dataset=audio_dataset,
+        eval_dataset=audio_dataset_val,
+        # TODO
+        # compute_metrics: Optional[Callable[[EvalPrediction], Dict]] = None,
+        # TODO
+        # callbacks: Optional[List[TrainerCallback]] = None,
     )
-    wandb_run = accelerator.get_tracker('wandb')
 
-    if train_config.gradient_accumulation_steps is not None:
-        accelerator.gradient_accumulation_steps = train_config.gradient_accumulation_steps
+    trainer.accelerator.log_with = filter_trackers('wandb')
+    trainer.accelerator.init_trackers(
+        project_name="tokenized_speech_lm",
+        config=train_config.model_dump()
+    )
 
-    model, optimizer, train_dataloader, val_dataloader = accelerator.prepare(model, optimizer, train_dataloader, val_dataloader)
-
-    last_validation_wer=0.0
-
-    for epoch in range(train_config.num_epochs):
-        if train_config.unfreeze_lm_at_epoch is not None and epoch == train_config.unfreeze_lm_at_epoch:
-            logger.info("Unfreeze lm decoder")
-            unfreeze_model(model.lm_decoder)
-
-        train_loop(accelerator, train_config, model, optimizer, optimizer_lr_scheduler, train_dataloader, epoch=epoch, criterion=criterion, last_validation_wer=last_validation_wer, device=device)
-
-        if epoch % train_config.evaluate_every_epoch_mod == 0:
-            validation_metrics = val_loop(train_config, model, tokenizer, val_dataloader, epoch=epoch, device=device, wer_compute=wer_compute, captioning_metrics=captioning_metrics)
-            logger.info(f"validation metrics {validation_metrics}")
-            last_validation_wer = validation_metrics.get('validation/wer', 0.0)
-
-            accelerator.log(validation_metrics)
-
-        if epoch % train_config.save_model_every_epoch_mod == 0:
-            base_path_for_model = pathlib.Path(f"data/models/{wandb_run.run.name}/last/")
-            save_model(train_config=train_config, model=model, path=base_path_for_model)
-
-    base_path_for_model = pathlib.Path(f"data/models/{wandb_run.run.name}/last/")
-    save_model(train_config=train_config, model=model, path=base_path_for_model)
-    accelerator.end_training()
+    trainer.train()
 
     return
 
@@ -208,19 +149,13 @@ def build_lm_decoder(train_config: TrainConfig, from_pretrained=None, device=Non
 
 def build_audio_encoder(train_config: TrainConfig, device=None):
 
-    if train_config.audio_encoder_type == AudioEncoderType.speechTokenizer:
-        config_path = 'data/speechtokenizer/config.json'
-        ckpt_path = 'data/speechtokenizer/ckpt.dev'
-        model = SpeechTokenizer.load_from_checkpoint(config_path, ckpt_path)
-        model.eval()
-    else:
-        kwargs = dict()
-        if device is not None and 'cuda' in str(device):
-            kwargs['torch_dtype'] = torch.float16
-            kwargs['attn_implementation'] = "flash_attention_2"
+    kwargs = dict()
+    if device is not None and 'cuda' in str(device):
+        kwargs['torch_dtype'] = torch.float16
+        kwargs['attn_implementation'] = "flash_attention_2"
 
-        model = HubertModel.from_pretrained("facebook/hubert-large-ls960-ft", mask_time_prob=0.0, **kwargs)
-        model.eval()
+    model = HubertModel.from_pretrained("facebook/hubert-large-ls960-ft", mask_time_prob=0.0, **kwargs)
+    model.eval()
 
     model = model.to(device)
 
@@ -242,12 +177,13 @@ def build_model(train_config: TrainConfig, from_pretrained=None, device=None):
     audio_encoder = build_audio_encoder(train_config, device=device)
 
     if from_pretrained is not None:
-        lm_decoder = build_lm_decoder(train_config, device=device)
+        lm_decoder = build_lm_decoder(train_config, from_pretrained=train_config.lm_pretrained_model, device=device)
 
-        model = AslmModel.from_pretrained(audio_encoder, lm_decoder, projection_type=train_config.segment_projection, audio_encoder_type=train_config.audio_encoder_type, hubert_embeddings_length_for_longest_audio_segment=train_config.hubert_embeddings_length_for_longest_audio_segment,  model_id=from_pretrained)
+        model = AslmModel.from_pretrained(from_pretrained, audio_encoder, lm_decoder)
     else:
         lm_decoder = build_lm_decoder(train_config, from_pretrained=train_config.lm_pretrained_model, device=device)
-        model = AslmModel(audio_encoder, lm_decoder, projection_type=train_config.segment_projection, audio_encoder_type=train_config.audio_encoder_type, hubert_embeddings_length_for_longest_audio_segment=train_config.hubert_embeddings_length_for_longest_audio_segment)
+        config = AslmConfig()
+        model = AslmModel(config, audio_encoder, lm_decoder)
 
         model.reinitialize_weights()
 
@@ -274,6 +210,9 @@ if __name__ == '__main__':
 
     args = parser.parse_args()
 
+    hf_parser = transformers.HfArgumentParser(TrainingArguments)
+    (training_args,) = hf_parser.parse_args_into_dataclasses()
+
     torch.backends.cuda.matmul.allow_tf32 = True
 
         #  2. Capture a dictionary of hyperparameters
@@ -294,16 +233,13 @@ if __name__ == '__main__':
         train_config.num_epochs = 2
 
     device = train_config.nn_device
-    device_placement = True
     logger.info(f"device {device}")
 
     logger.info("loading language model")
 
-    model, tokenizer = build_model(train_config, from_pretrained=train_config.from_pretrained, device=device)
+    model, tokenizer = build_model(train_config, device=device)
 
     logger.info("model was loaded")
-
-    train_dataloader, val_dataloader = build_dataloaders(train_config, tokenizer)
 
     captioning_metrics = evaluate.combine(
         [
@@ -327,12 +263,8 @@ if __name__ == '__main__':
         train(
             model=model,
             tokenizer=tokenizer,
-            train_dataloader=train_dataloader,
-            val_dataloader=val_dataloader,
             train_config=train_config,
-            captioning_metrics=captioning_metrics,
-            wer_compute=wer_compute,
-            device=device,
+            training_args=training_args,
         )
 
     if args.profile:
