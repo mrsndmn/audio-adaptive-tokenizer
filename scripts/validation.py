@@ -1,7 +1,6 @@
 import torch
 
 from scripts.trainer_train import build_model, build_dataloaders, TrainingArguments, AATTrainer
-from aat.training.validate import val_loop
 
 from aat.training.config import TrainConfig, projection_training
 
@@ -17,6 +16,8 @@ from aat.training.compute_metrics import ComputeMetrics
 
 
 if __name__ == "__main__":
+    
+    # transformers.logging.set_verbosity_info()
 
     train_config = projection_training()
     train_config.val_batch_size = 20
@@ -34,16 +35,6 @@ if __name__ == "__main__":
 
     torch.backends.cuda.matmul.allow_tf32 = True
 
-    # captioning_metrics = evaluate.combine(
-    #     [
-    #         evaluate.load("bleu", keep_in_memory=True),
-    #         evaluate.load("rouge", keep_in_memory=True),
-    #         evaluate.load("meteor", keep_in_memory=True),
-    #     ]
-    # )
-    # wer_compute = evaluate.load("wer")
-    # validation_metrics = val_loop(train_config, model, tokenizer, val_dataloader, epoch=0, device=device, wer_compute=wer_compute, captioning_metrics=captioning_metrics, no_loss=True)
-    
     trainer = AATTrainer(
         model,
         training_args,
