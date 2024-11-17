@@ -16,8 +16,8 @@ def compute_validation_metrics(generations: List[str], references: List[List[str
 
     wer_references = [ x[0] for x in references ]
 
-    logger.info(f"generations {generations}")
-    logger.info(f"wer_references {wer_references}")
+    logger.info(f"generations {generations[:10]}")
+    logger.info(f"wer_references {wer_references[:10]}")
 
     wer_score = 0.0
     if wer_compute is not None:

@@ -19,6 +19,11 @@ logging.basicConfig(level=logging.INFO, format='%(asctime)s %(levelname)s %(mess
 
 import re
 
+from transformers import EvalPrediction
+
+
+
+
 @torch.no_grad()
 def val_loop(train_config: TrainConfig, model: AslmModel, tokenizer, val_dataloader: DataLoader, epoch, no_loss=False, device=None, wer_compute=None, captioning_metrics=None):
     if train_config.no_validation:

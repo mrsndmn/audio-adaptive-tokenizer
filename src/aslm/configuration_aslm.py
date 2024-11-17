@@ -42,6 +42,9 @@ class SegmentProjectionEnum(str, Enum):
 
 
 class AslmConfig(PretrainedConfig):
+
+    keys_to_ignore_at_inference = [ 'prefix_input_ids', ]
+
     r"""
     This is the configuration class to store the configuration of a [`AslmModel`].
 

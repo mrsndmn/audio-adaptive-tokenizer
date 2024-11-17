@@ -8,7 +8,7 @@ import torch
 import torch.nn as nn
 from torch.amp import autocast
 
-from typing import Optional
+from typing import Optional, List
 
 import logging
 import evaluate
@@ -99,7 +99,7 @@ def train(
     audio_dataset_val = audio_dataset['valid']
     audio_dataset =  audio_dataset['train']
     audio_dataset = audio_dataset.shuffle(seed=42)
-
+    
     trainer = AATTrainer(
         model,
         training_args,
@@ -240,15 +240,6 @@ if __name__ == '__main__':
     model, tokenizer = build_model(train_config, device=device)
 
     logger.info("model was loaded")
-
-    captioning_metrics = evaluate.combine(
-        [
-            evaluate.load("bleu", keep_in_memory=True),
-            evaluate.load("rouge", keep_in_memory=True),
-            evaluate.load("meteor", keep_in_memory=True),
-        ]
-    )
-    wer_compute = evaluate.load("wer")
 
     # Initialise your wandb run, passing wandb parameters and any config information
 
