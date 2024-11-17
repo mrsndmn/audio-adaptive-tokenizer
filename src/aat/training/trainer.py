@@ -41,6 +41,11 @@ class TrainingArguments(transformers.TrainingArguments):
     gradient_accumulation_steps: int = field(default=1)
 
     include_for_metrics: List[str] = field(default_factory=lambda: [ 'inputs' ])
+    
+    num_train_epochs: int = field(default=3)
+    eval_steps: int = field(default=2000)
+    eval_strategy: str = field(default='steps')
+
 
 class AATTrainer(Trainer):
 

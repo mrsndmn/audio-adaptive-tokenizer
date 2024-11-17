@@ -38,6 +38,8 @@ from aat.training.trainer import AATTrainer, TrainingArguments
 
 from accelerate.tracking import filter_trackers
 
+from aat.training.compute_metrics import ComputeMetrics
+
 
 @dataclass
 class ModelArguments:
@@ -96,18 +98,18 @@ def train(
     # ignore_index=tokenizer.pad_token_id
 
     audio_dataset = datasets.load_dataset("nguyenvulebinh/asr-alignment", 'libris')
-    audio_dataset_val = audio_dataset['valid']
+    audio_dataset_val = audio_dataset['valid'].select(range(60))
     audio_dataset =  audio_dataset['train']
     audio_dataset = audio_dataset.shuffle(seed=42)
     
     trainer = AATTrainer(
         model,
         training_args,
+        processing_class=tokenizer,
         data_collator=NoSegmentationAudioWaveformCollator(train_config, tokenizer),
         train_dataset=audio_dataset,
         eval_dataset=audio_dataset_val,
-        # TODO
-        # compute_metrics: Optional[Callable[[EvalPrediction], Dict]] = None,
+        compute_metrics=ComputeMetrics(tokenizer),
         # TODO
         # callbacks: Optional[List[TrainerCallback]] = None,
     )
@@ -208,10 +210,10 @@ if __name__ == '__main__':
     parser.add_argument('-f', '--finetune', action='store_true', default=False)
     parser.add_argument('-p', '--profile', action='store_true', default=False)
 
-    args = parser.parse_args()
+    args, remainig_args = parser.parse_known_args()
 
     hf_parser = transformers.HfArgumentParser(TrainingArguments)
-    (training_args,) = hf_parser.parse_args_into_dataclasses()
+    (training_args,) = hf_parser.parse_args_into_dataclasses(args=remainig_args)
 
     torch.backends.cuda.matmul.allow_tf32 = True
 
@@ -222,6 +224,10 @@ if __name__ == '__main__':
 
     if args.finetune:
         train_config = finetuning_lm()
+        training_args.num_train_epochs = 1
+        training_args.per_device_train_batch_size = 20
+        training_args.gradient_accumulation_steps = 5
+        training_args.eval_steps = 300
     else:
         train_config = projection_training()
 
@@ -237,7 +243,7 @@ if __name__ == '__main__':
 
     logger.info("loading language model")
 
-    model, tokenizer = build_model(train_config, device=device)
+    model, tokenizer = build_model(train_config, device=device, from_pretrained="data/models/checkpoint-16872")
 
     logger.info("model was loaded")
 
