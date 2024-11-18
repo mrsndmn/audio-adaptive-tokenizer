@@ -30,21 +30,32 @@ import time
 
 @dataclass
 class TrainingArguments(transformers.TrainingArguments):
-    output_dir: str = field(default="data/models")
+    output_dir: str = field(default="data/models/hubert_linear_projection_experiments")
     cache_dir: Optional[str] = field(default=None)
     optim: str = field(default="adamw_torch")
     remove_unused_columns: bool = field(default=False)
     freeze_mm_mlp_adapter: bool = field(default=False)
     dataloader_drop_last: bool = field(default=True)
     dataloader_num_workers: int = field(default=10)
-    per_device_train_batch_size: int = field(default=50)
-    gradient_accumulation_steps: int = field(default=1)
+    per_device_train_batch_size: int = field(default=40)
+    gradient_accumulation_steps: int = field(default=2)
 
     include_for_metrics: List[str] = field(default_factory=lambda: [ 'inputs' ])
     
-    num_train_epochs: int = field(default=3)
-    eval_steps: int = field(default=2000)
+    num_train_epochs: int = field(default=10)
+    eval_steps: int = field(default=500)
     eval_strategy: str = field(default='steps')
+    
+    save_total_limit: int = field(default=3)
+    save_steps: int = field(default=500)
+    load_best_model_at_end: bool =  field(default=True)
+
+    logging_steps: int = field(default=50)
+    
+    learning_rate: float = field(default=2e-4)
+    
+    # metric_for_best_model = loss
+    
 
 
 class AATTrainer(Trainer):

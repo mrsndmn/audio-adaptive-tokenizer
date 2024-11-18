@@ -40,6 +40,8 @@ from accelerate.tracking import filter_trackers
 
 from aat.training.compute_metrics import ComputeMetrics
 
+import wandb
+
 
 @dataclass
 class ModelArguments:
@@ -102,6 +104,11 @@ def train(
     audio_dataset =  audio_dataset['train']
     audio_dataset = audio_dataset.shuffle(seed=42)
     
+    early_stopping_callback = transformers.EarlyStoppingCallback(
+        early_stopping_patience=5,
+        early_stopping_threshold=0.005
+    )
+    
     trainer = AATTrainer(
         model,
         training_args,
@@ -110,8 +117,7 @@ def train(
         train_dataset=audio_dataset,
         eval_dataset=audio_dataset_val,
         compute_metrics=ComputeMetrics(tokenizer),
-        # TODO
-        # callbacks: Optional[List[TrainerCallback]] = None,
+        callbacks=[ early_stopping_callback ],
     )
 
     trainer.accelerator.log_with = filter_trackers('wandb')
@@ -121,6 +127,8 @@ def train(
     )
 
     trainer.train()
+    
+    trainer.accelerator.end_training()
 
     return
 
@@ -164,7 +172,7 @@ def build_audio_encoder(train_config: TrainConfig, device=None):
     return model
 
 
-def build_model(train_config: TrainConfig, from_pretrained=None, device=None):
+def build_model(train_config: TrainConfig, from_pretrained=None, device=None, hubert_embeddings_length_for_longest_audio_segment=7):
 
     # lm_decoder = LlamaForCausalLM.from_pretrained("data/models/hearty-shadow-9/last")
 
@@ -184,7 +192,7 @@ def build_model(train_config: TrainConfig, from_pretrained=None, device=None):
         model = AslmModel.from_pretrained(from_pretrained, audio_encoder, lm_decoder)
     else:
         lm_decoder = build_lm_decoder(train_config, from_pretrained=train_config.lm_pretrained_model, device=device)
-        config = AslmConfig()
+        config = AslmConfig(hubert_embeddings_length_for_longest_audio_segment=hubert_embeddings_length_for_longest_audio_segment)
         model = AslmModel(config, audio_encoder, lm_decoder)
 
         model.reinitialize_weights()
@@ -203,7 +211,7 @@ def build_model(train_config: TrainConfig, from_pretrained=None, device=None):
 
 
 if __name__ == '__main__':
-
+    
     parser = argparse.ArgumentParser()
     # parser.add_argument('-c', '--config')
     parser.add_argument('-t', '--test-run', action='store_true', default=False)
@@ -242,41 +250,46 @@ if __name__ == '__main__':
     logger.info(f"device {device}")
 
     logger.info("loading language model")
+    
+    output_dir_base = training_args.output_dir
+    
+    for hubert_embeddings_length_for_longest_audio_segment in range(11, 20, 2):
+        training_args.output_dir = output_dir_base + f"_{hubert_embeddings_length_for_longest_audio_segment}"
 
-    model, tokenizer = build_model(train_config, device=device, from_pretrained="data/models/checkpoint-16872")
+        model, tokenizer = build_model(train_config, device=device, from_pretrained=None, hubert_embeddings_length_for_longest_audio_segment=hubert_embeddings_length_for_longest_audio_segment)
 
-    logger.info("model was loaded")
+        logger.info("model was loaded")
 
-    # Initialise your wandb run, passing wandb parameters and any config information
+        # Initialise your wandb run, passing wandb parameters and any config information
 
-    trainable_parameters_count = sum(p.numel() for p in model.parameters() if p.requires_grad)
-    total_parameters_count = sum(p.numel() for p in model.parameters())
-    logger.info(f"trainable model parameters: {trainable_parameters_count}")
-    logger.info(f"total model parameters: {total_parameters_count}")
+        trainable_parameters_count = sum(p.numel() for p in model.parameters() if p.requires_grad)
+        total_parameters_count = sum(p.numel() for p in model.parameters())
+        logger.info(f"trainable model parameters: {trainable_parameters_count}")
+        logger.info(f"total model parameters: {total_parameters_count}")
 
-    os.environ["TOKENIZERS_PARALLELISM"] = "false"
+        os.environ["TOKENIZERS_PARALLELISM"] = "false"
 
-    def run_training():
-        train(
-            model=model,
-            tokenizer=tokenizer,
-            train_config=train_config,
-            training_args=training_args,
-        )
+        def run_training():
+            train(
+                model=model,
+                tokenizer=tokenizer,
+                train_config=train_config,
+                training_args=training_args,
+            )
 
-    if args.profile:
-        logger.info("Run training with profiling")
-        with cProfile.Profile() as pr:
+        if args.profile:
+            logger.info("Run training with profiling")
+            with cProfile.Profile() as pr:
 
-            if train_config.optim_lm:
-                run_training()
-            else:
-                with autocast(dtype=torch.bfloat16):
+                if train_config.optim_lm:
                     run_training()
+                else:
+                    with autocast(dtype=torch.bfloat16):
+                        run_training()
 
-            profile_file_name = "train_profile.prof"
-            logger.info(f"Save profile: {profile_file_name}")
-            pr.dump_stats(profile_file_name)
-    else:
-        run_training()
+                profile_file_name = "train_profile.prof"
+                logger.info(f"Save profile: {profile_file_name}")
+                pr.dump_stats(profile_file_name)
+        else:
+            run_training()
 
