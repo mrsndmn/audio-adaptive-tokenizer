@@ -69,20 +69,9 @@ class DataArguments:
     image_aspect_ratio: str = 'square'
 
 
-
-
-
 logger = logging.getLogger(__name__)
 logging.basicConfig(level=logging.INFO, format='%(asctime)s %(levelname)s %(message)s')
 
-
-def save_model(train_config: TrainConfig, model: AslmModel, path: pathlib.Path):
-    path.mkdir(parents=True, exist_ok=True)
-    logger.info(f"save model to {path}")
-
-    model.save_pretrained(path)
-
-    return
 
 
 def train(
@@ -93,19 +82,13 @@ def train(
         ):
 
 
-    # TODO LR Scheduler, optimizers
-
-    # Иногда pad_token_id == eos_token_id,
-    # но мы хотим, чтобы модель умела предсказывать eos_token_id
-    # ignore_index=tokenizer.pad_token_id
-
     audio_dataset = datasets.load_dataset("nguyenvulebinh/asr-alignment", 'libris')
     audio_dataset_val = audio_dataset['valid'].select(range(60))
     audio_dataset =  audio_dataset['train']
     audio_dataset = audio_dataset.shuffle(seed=42)
     
     early_stopping_callback = transformers.EarlyStoppingCallback(
-        early_stopping_patience=5,
+        early_stopping_patience=3,
         early_stopping_threshold=0.01
     )
     
@@ -253,7 +236,7 @@ if __name__ == '__main__':
     
     output_dir_base = training_args.output_dir
     
-    for hubert_embeddings_length_for_longest_audio_segment in range(15, 50, 5):
+    for hubert_embeddings_length_for_longest_audio_segment in range(10, 15, 1):
         training_args.output_dir = output_dir_base + f"_{hubert_embeddings_length_for_longest_audio_segment}"
 
         model, tokenizer = build_model(train_config, device=device, from_pretrained=None, hubert_embeddings_length_for_longest_audio_segment=hubert_embeddings_length_for_longest_audio_segment)
