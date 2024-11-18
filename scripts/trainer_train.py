@@ -106,7 +106,7 @@ def train(
     
     early_stopping_callback = transformers.EarlyStoppingCallback(
         early_stopping_patience=5,
-        early_stopping_threshold=0.005
+        early_stopping_threshold=0.01
     )
     
     trainer = AATTrainer(
@@ -253,7 +253,7 @@ if __name__ == '__main__':
     
     output_dir_base = training_args.output_dir
     
-    for hubert_embeddings_length_for_longest_audio_segment in range(11, 20, 2):
+    for hubert_embeddings_length_for_longest_audio_segment in range(15, 50, 5):
         training_args.output_dir = output_dir_base + f"_{hubert_embeddings_length_for_longest_audio_segment}"
 
         model, tokenizer = build_model(train_config, device=device, from_pretrained=None, hubert_embeddings_length_for_longest_audio_segment=hubert_embeddings_length_for_longest_audio_segment)
