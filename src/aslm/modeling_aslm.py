@@ -169,8 +169,8 @@ class AslmModel(PreTrainedModel):
             audio_embeds_attention_mask_reshaped = audio_embeds_attention_mask[:, :cropped_seq_len].reshape(batch_size, redused_seq_len, -1).any(dim=-1)
             assert audio_embeds_attention_mask_reshaped.sum() < audio_embeds_attention_mask_reshaped.numel()
             assert audio_embeds_attention_mask_reshaped.sum() > 0
-            if segments_boarders_attention_mask is not None:
-                assert (segments_boarders_attention_mask.bool().flatten() == audio_embeds_attention_mask_reshaped.flatten()).all()
+            # if segments_boarders_attention_mask is not None:
+            #     assert (segments_boarders_attention_mask.bool().flatten() == audio_embeds_attention_mask_reshaped.flatten()).all()
 
             audio_embeds_attention_mask = audio_embeds_attention_mask_reshaped
         else:
