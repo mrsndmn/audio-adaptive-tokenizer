@@ -25,12 +25,8 @@ def build_collate_fn(train_config: TrainConfig, tokenizer, max_segment_waveform_
         max_segment_duration_milliseconds=max_segment_duration_milliseconds,
     )
 
-
     n_words = None if validation else train_config.n_words
     noise_augmentation = False if validation else True
-
-    if train_config.segmentation == SegmentationType.none:
-        return NoSegmentationAudioWaveformCollator(train_config, tokenizer, sampling_rate=train_config.sampling_rate)
 
     return TokenizedAudioWaveformCollator(
         train_config,

@@ -76,10 +76,8 @@ class AslmConfig(PretrainedConfig):
 
     def __init__(
         self,
-        audio_encoder_type: AudioEncoderType = AudioEncoderType.hubert,
         projection_type: SegmentProjectionEnum = SegmentProjectionEnum.linear,
         hubert_embeddings_length_for_longest_audio_segment: int = 7,
-        segmentation: SegmentationType = SegmentationType.none,
         uniform_segmentation_frames_per_segment: Optional[int] = None,
         max_segment_waveform_frames: Optional[int] = None,
         pad_token_id=-1,
@@ -90,12 +88,10 @@ class AslmConfig(PretrainedConfig):
         super().__init__(**kwargs, pad_token_id=pad_token_id, bos_token_id=bos_token_id, eos_token_id=eos_token_id)
 
         # Model
-        self.audio_encoder_type = audio_encoder_type
         self.projection_type = projection_type
         self.hubert_embeddings_length_for_longest_audio_segment = hubert_embeddings_length_for_longest_audio_segment
 
         # Segmentation
-        self.segmentation = segmentation
         self.uniform_segmentation_frames_per_segment = uniform_segmentation_frames_per_segment
         self.max_segment_waveform_frames = max_segment_waveform_frames
 

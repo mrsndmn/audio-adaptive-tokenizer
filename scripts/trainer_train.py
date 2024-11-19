@@ -26,15 +26,16 @@ from torch.optim.lr_scheduler import CyclicLR
 
 from speechtokenizer import SpeechTokenizer
 
+from aat.tokenizer import AdaptiveAudioAmplitudeTokenizer
 
 from aat.training.config import TrainConfig, projection_training, finetuning_lm, AudioEncoderType
 from aat.training.dataloaders import build_dataloaders
 
-from aat.training.collate import NoSegmentationAudioWaveformCollator
+from aat.training.collate import NoSegmentationAudioWaveformCollator, TokenizedAudioWaveformCollator
 
 from dataclasses import dataclass, field
 
-from aat.training.trainer import AATTrainer, TrainingArguments
+from aat.training.trainer import AATTrainer, AATTrainerSegmentation, TrainingArguments
 
 from accelerate.tracking import filter_trackers
 
@@ -81,7 +82,6 @@ def train(
         training_args: TrainingArguments,
         ):
 
-
     audio_dataset = datasets.load_dataset("nguyenvulebinh/asr-alignment", 'libris')
     audio_dataset_val = audio_dataset['valid'].select(range(60))
     audio_dataset =  audio_dataset['train']
@@ -92,16 +92,35 @@ def train(
         early_stopping_threshold=0.01
     )
     
-    trainer = AATTrainer(
-        model,
-        training_args,
-        processing_class=tokenizer,
-        data_collator=NoSegmentationAudioWaveformCollator(train_config, tokenizer),
-        train_dataset=audio_dataset,
-        eval_dataset=audio_dataset_val,
-        compute_metrics=ComputeMetrics(tokenizer),
-        callbacks=[ early_stopping_callback ],
-    )
+    if training_args.segmentation == "none":
+        trainer = AATTrainer(
+            model,
+            training_args,
+            processing_class=tokenizer,
+            data_collator=NoSegmentationAudioWaveformCollator(train_config, tokenizer),
+            train_dataset=audio_dataset,
+            eval_dataset=audio_dataset_val,
+            compute_metrics=ComputeMetrics(tokenizer),
+            callbacks=[ early_stopping_callback ],
+        )
+    elif training_args.segmentation == "uniform":
+        audio_tokenizer = AdaptiveAudioAmplitudeTokenizer()
+        
+        trainer = AATTrainerSegmentation(
+            model,
+            training_args,
+            processing_class=tokenizer,
+            data_collator=TokenizedAudioWaveformCollator(training_args.segmentation, train_config, audio_tokenizer, tokenizer, uniform_segmentation_frames_per_segment=3200),
+            train_dataset=audio_dataset,
+            eval_dataset=audio_dataset_val,
+            compute_metrics=ComputeMetrics(tokenizer),
+            callbacks=[ early_stopping_callback ],
+        )
+    elif training_args.segmentation == "adaptive":
+        raise NotImplementedError()
+    else:
+        raise ValueError("invalid segmentation value:", training_args.segmentation)
+
 
     trainer.accelerator.log_with = filter_trackers('wandb')
     trainer.accelerator.init_trackers(
@@ -208,7 +227,7 @@ if __name__ == '__main__':
 
     torch.backends.cuda.matmul.allow_tf32 = True
 
-        #  2. Capture a dictionary of hyperparameters
+    #  2. Capture a dictionary of hyperparameters
     # with open(args.config, 'r') as f:
     #     config_json_data = f.read()
     # train_config = TrainConfig.model_validate_json(config_json_data)
@@ -236,7 +255,7 @@ if __name__ == '__main__':
     
     output_dir_base = training_args.output_dir
     
-    for hubert_embeddings_length_for_longest_audio_segment in range(10, 15, 1):
+    for hubert_embeddings_length_for_longest_audio_segment in range(12, 15, 1):
         training_args.output_dir = output_dir_base + f"_{hubert_embeddings_length_for_longest_audio_segment}"
 
         model, tokenizer = build_model(train_config, device=device, from_pretrained=None, hubert_embeddings_length_for_longest_audio_segment=hubert_embeddings_length_for_longest_audio_segment)

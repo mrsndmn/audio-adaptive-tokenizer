@@ -52,8 +52,6 @@ class AslmModel(PreTrainedModel):
         self.audio_encoder = audio_encoder
         audio_encoder_hidden_size = audio_encoder.config.hidden_size
 
-        assert config.audio_encoder_type == AudioEncoderType.hubert, 'only hubert audio encoder type is supported'
-
         if config.projection_type == SegmentProjectionEnum.transformer_encoder:
             self.audio_embeddings_pooling = AudioEmbeddingsEncoderPooling()
         elif config.projection_type == SegmentProjectionEnum.linear:
@@ -105,22 +103,31 @@ class AslmModel(PreTrainedModel):
         """
 
         # todo move this cases to projection class logic
-        if self.config.audio_encoder_type == AudioEncoderType.hubert:
-            with torch.no_grad():
-                ae_waveform = waveform
-                if self.audio_encoder.dtype != ae_waveform.dtype:
-                    ae_waveform = ae_waveform.to(self.audio_encoder.dtype)
-                audio_embeds = self.audio_encoder(
-                    input_values=ae_waveform,
-                    attention_mask=waveforms_mask,
-                ).last_hidden_state
+        with torch.no_grad():
+            ae_waveform = waveform
+            if self.audio_encoder.dtype != ae_waveform.dtype:
+                ae_waveform = ae_waveform.to(self.audio_encoder.dtype)
+            audio_embeds = self.audio_encoder(
+                input_values=ae_waveform,
+                attention_mask=waveforms_mask,
+            ).last_hidden_state
 
-                audio_embeds = audio_embeds.to(torch.float32)
+            audio_embeds = audio_embeds.to(torch.float32)
 
-            audio_embeds_attention_mask = self.audio_encoder._get_feature_vector_attention_mask(audio_embeds.shape[1], waveforms_mask)
-
-        else:
-            raise NotImplementedError
+        batch_size = audio_embeds.shape[0]
+        new_seq_len = audio_embeds.shape[1]
+        waveform_seq_len = waveforms_mask.shape[1]
+        audio_embeds_attention_mask_hands = waveforms_mask
+        if waveform_seq_len % new_seq_len != 0:
+            # extra_padding_length = new_seq_len - (waveform_seq_len % new_seq_len)
+            # extra_padding = torch.zeros([batch_size, extra_padding_length], dtype=audio_embeds_attention_mask.dtype, device=audio_embeds_attention_mask.device)
+            # audio_embeds_attention_mask = torch.cat([audio_embeds_attention_mask, extra_padding])
+            audio_embeds_attention_mask_hands = audio_embeds_attention_mask_hands[:, :-(waveform_seq_len % new_seq_len)]
+        audio_embeds_attention_mask_hands = audio_embeds_attention_mask_hands.reshape(batch_size, new_seq_len, -1).any(dim=-1).long()
+        audio_embeds_negative_attention_mask = (audio_embeds_attention_mask_hands == 0)
+        
+        audio_embeds_attention_mask = self.audio_encoder._get_feature_vector_attention_mask(audio_embeds.shape[1], waveforms_mask)
+        audio_embeds_attention_mask[audio_embeds_negative_attention_mask] = 0
 
         assert not audio_embeds.isnan().any()
 
@@ -134,25 +141,38 @@ class AslmModel(PreTrainedModel):
         return audio_embeds, audio_embeds_attention_mask
 
 
-    def audio_embeddings_projection(self, audio_embeds, audio_embeds_attention_mask):
+    def audio_embeddings_projection(self, audio_embeds, audio_embeds_attention_mask, segments_boarders_attention_mask=None):
+        
+        # audio_hidden_states ~ [ bs * segments_count, seq_len, embedding_dim ]
+        # embeddings_attention_mask ~ [ bs * segments_count, seq_len ]
+
         # todo move this cases to projection class logic
         if self.config.projection_type == SegmentProjectionEnum.transformer_encoder:
             raise NotImplementedError
         elif self.config.projection_type == SegmentProjectionEnum.mean:
             raise NotImplementedError
         elif self.config.projection_type == SegmentProjectionEnum.linear:
+            audio_embeds[audio_embeds_attention_mask == 0] = 0
+
             seq_len = audio_embeds.shape[1]
             batch_size = audio_embeds.shape[0]
             cropped_seq_len = seq_len - (seq_len % self.config.hubert_embeddings_length_for_longest_audio_segment)
             redused_seq_len = cropped_seq_len // self.config.hubert_embeddings_length_for_longest_audio_segment
             audio_hidden_states_cropped = audio_embeds[:, :cropped_seq_len, :]
             assert audio_hidden_states_cropped.shape[1] > 0
-
+            
 
             audio_hidden_states_cropped = audio_hidden_states_cropped.reshape(batch_size, redused_seq_len, -1)
 
             audio_embeds = self.audio_encoder_projection(audio_hidden_states_cropped)
-            audio_embeds_attention_mask = audio_embeds_attention_mask[:, :cropped_seq_len].reshape(batch_size, redused_seq_len, -1).any(dim=-1)
+
+            audio_embeds_attention_mask_reshaped = audio_embeds_attention_mask[:, :cropped_seq_len].reshape(batch_size, redused_seq_len, -1).any(dim=-1)
+            assert audio_embeds_attention_mask_reshaped.sum() < audio_embeds_attention_mask_reshaped.numel()
+            assert audio_embeds_attention_mask_reshaped.sum() > 0
+            if segments_boarders_attention_mask is not None:
+                assert (segments_boarders_attention_mask.bool().flatten() == audio_embeds_attention_mask_reshaped.flatten()).all()
+
+            audio_embeds_attention_mask = audio_embeds_attention_mask_reshaped
         else:
             raise ValueError(f"unsupported projection_type: {self.config.projection_type}")
 
@@ -160,7 +180,7 @@ class AslmModel(PreTrainedModel):
 
         return audio_embeds, audio_embeds_attention_mask
 
-    def prepare_audio_inputs(self, input_ids=None, inputs_embeds=None, audio_embeds=None, attention_mask=None, audio_embeds_attention_mask=None):
+    def prepare_audio_inputs(self, input_ids=None, inputs_embeds=None, audio_embeds=None, attention_mask=None, audio_embeds_attention_mask=None, segments_count=None, segments_boarders_attention_mask=None):
 
         if input_ids is not None:
             if inputs_embeds is not None:
@@ -173,11 +193,24 @@ class AslmModel(PreTrainedModel):
         if audio_embeds is None:
             raise Exception("no audio embeds")
 
-        audio_embeds_projection, audio_embeds_attention_mask = self.audio_embeddings_projection(audio_embeds=audio_embeds, audio_embeds_attention_mask=audio_embeds_attention_mask)
+        audio_embeds_projection, audio_embeds_attention_mask = self.audio_embeddings_projection(audio_embeds=audio_embeds, audio_embeds_attention_mask=audio_embeds_attention_mask, segments_boarders_attention_mask=segments_boarders_attention_mask)
+        # print("audio_embeds_attention_mask", audio_embeds_attention_mask.shape)
 
-        bath_size = audio_embeds_projection.shape[0]
+        batch_size = inputs_embeds.shape[0]
 
-        audio_start_end_tokens = torch.ones([bath_size, 2], device=audio_embeds_projection.device, dtype=torch.long)
+        # if segments_boarders_attention_mask is not None:
+        #     assert (audio_embeds_attention_mask.flatten() == segments_boarders_attention_mask.flatten()).all()
+        
+        if segments_count is not None:
+            # we have a del with a segmented model
+            audio_embeds_projection = audio_embeds_projection.squeeze(1)
+            audio_embeds_projection = audio_embeds_projection.unflatten(0, [batch_size, segments_count])
+            audio_embeds_attention_mask = audio_embeds_attention_mask.squeeze(1)
+            audio_embeds_attention_mask = audio_embeds_attention_mask.unflatten(0, [batch_size, segments_count])
+
+        assert audio_embeds_projection.shape[0] == batch_size, "audio_embeds_projection batch size is equals to text embeddings batch size"
+
+        audio_start_end_tokens = torch.ones([batch_size, 2], device=audio_embeds_projection.device, dtype=torch.long)
         audio_start_end_tokens[:, 0] = audio_start_end_tokens[:, 0] * self.config.bos_token_id
         audio_start_end_tokens[:, 1] = audio_start_end_tokens[:, 1] * self.config.eos_token_id
 
@@ -194,14 +227,14 @@ class AslmModel(PreTrainedModel):
 
         inputs_embeds = torch.cat(all_embeddings, dim=1)
 
-        bath_size = audio_embeds_projection.shape[0]
+        batch_size = audio_embeds_projection.shape[0]
         audio_tokens_seq_len = audio_embeds_projection.shape[1] + 2
 
         if attention_mask is not None:
             if audio_embeds_attention_mask is None:
-                additional_attention_mask = torch.ones([bath_size, audio_tokens_seq_len], device=audio_embeds_projection.device)
+                additional_attention_mask = torch.ones([batch_size, audio_tokens_seq_len], device=audio_embeds_projection.device)
             else:
-                audio_tokens_labels_mask = torch.ones([bath_size, 1], device=audio_embeds_projection.device)
+                audio_tokens_labels_mask = torch.ones([batch_size, 1], device=audio_embeds_projection.device)
                 additional_attention_mask = torch.cat([audio_tokens_labels_mask, audio_embeds_attention_mask, audio_tokens_labels_mask], dim=1)
 
             # мы можем это сделать тк атеншну все равно на какой позиции находятся токены,
@@ -210,9 +243,9 @@ class AslmModel(PreTrainedModel):
             assert attention_mask.shape[1] == inputs_embeds.shape[1], f"{attention_mask.shape[1]} == {inputs_embeds.shape[1]}"
         else:
             if audio_embeds_attention_mask is None:
-                attention_mask = torch.ones([bath_size, audio_tokens_seq_len], device=audio_embeds_projection.device)
+                attention_mask = torch.ones([batch_size, audio_tokens_seq_len], device=audio_embeds_projection.device)
             else:
-                audio_tokens_labels_mask = torch.ones([bath_size, 1], device=audio_embeds_projection.device)
+                audio_tokens_labels_mask = torch.ones([batch_size, 1], device=audio_embeds_projection.device)
                 attention_mask = torch.cat([audio_tokens_labels_mask, audio_embeds_attention_mask, audio_tokens_labels_mask], dim=1)
 
         return {

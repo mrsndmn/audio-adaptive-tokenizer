@@ -54,8 +54,8 @@ class TrainingArguments(transformers.TrainingArguments):
     
     learning_rate: float = field(default=2e-4)
     
-    # metric_for_best_model = loss
-    
+    segmentation: str = field(default="none")
+
 
 
 class AATTrainer(Trainer):
@@ -89,16 +89,8 @@ class AATTrainer(Trainer):
             self.optimizer = optimizer_cls(optimizer_grouped_parameters, **optimizer_kwargs)
 
         return self.optimizer
-
-
-    def _prepare_inputs(self, inputs: Dict[str, Union[torch.Tensor, Any]]) -> Dict[str, Union[torch.Tensor, Any]]:
-        """
-        Prepare `inputs` before feeding them to the model, converting them to tensors if they are not already and
-        handling potential state.
-        """
-
-        # assert self.args.segmentation == SegmentationType.none
-
+    
+    def _get_audio_embeds_from_inputs(self, inputs):
         # move to device
         # [ bs, max_segment_waveform_frames ]
         batched_waveforms = inputs['waveforms'].to(device=self.args.device)
@@ -113,6 +105,17 @@ class AATTrainer(Trainer):
         assert audio_embeds.shape[0] == audio_embeds_attention_mask.shape[0]
         assert audio_embeds.shape[1] == audio_embeds_attention_mask.shape[1]
 
+        return audio_embeds, audio_embeds_attention_mask
+
+    def _prepare_inputs(self, inputs: Dict[str, Union[torch.Tensor, Any]]) -> Dict[str, Union[torch.Tensor, Any]]:
+        """
+        Prepare `inputs` before feeding them to the model, converting them to tensors if they are not already and
+        handling potential state.
+        """
+
+        # assert self.args.segmentation == SegmentationType.none
+        
+        audio_embeds, audio_embeds_attention_mask = self._get_audio_embeds_from_inputs(inputs)
 
         inputs_ids = inputs['input_ids'].to(self.args.device)
         inputs_embeds = self.model.encode_text(inputs_ids)
@@ -123,6 +126,7 @@ class AATTrainer(Trainer):
             attention_mask=attention_mask,
             audio_embeds=audio_embeds,
             audio_embeds_attention_mask=audio_embeds_attention_mask,
+            segments_count=inputs.get('segments_count', None),
         )
 
         return {
@@ -186,7 +190,7 @@ class AATTrainer(Trainer):
 
         if log_metrics:
             step_metrics = {
-                "seq_len": inputs['attention_mask'].shape[-1],
+                "debug/seq_len": inputs['attention_mask'].shape[-1],
                 "debug/audio_embeddings_norm_mean": audio_embeddings_norm_mean,
                 "debug/text_embeddings_norm_mean": text_embeddings_norm_mean,
                 "debug/audio_embeddings_mean": audio_embeddings_mean,
@@ -491,12 +495,7 @@ class AATTrainer(Trainer):
 
     def update_eval_set_kwargs_containers(self, model, inputs):
         
-        batched_waveforms = inputs['waveforms']
-        batched_waveforms_attention_mask = inputs['waveforms_attention_mask']
-
-        # audio_hidden_states ~ [ bs, seq_len, embedding_dim ]
-        # embeddings_attention_mask ~ [ bs, seq_len ]
-        audio_embeds_last_hidden_state, audio_embeds_attention_mask = model.encode_audio(batched_waveforms, batched_waveforms_attention_mask)
+        audio_embeds_last_hidden_state, audio_embeds_attention_mask = self._get_audio_embeds_from_inputs(inputs)
 
         # generations_bos = torch.full([ audio_embeds_last_hidden_state.shape[0], 1 ], tokenizer.bos_token_id, device=device)
         # attention_mask_bos = torch.ones_like(generations_bos)
@@ -505,6 +504,7 @@ class AATTrainer(Trainer):
             attention_mask=inputs['prefix_attention_mask'],
             audio_embeds=audio_embeds_last_hidden_state,
             audio_embeds_attention_mask=audio_embeds_attention_mask,
+            segments_count=inputs.get('segments_count', None),
         )
 
         gen_params = {
@@ -541,4 +541,63 @@ class AATTrainer(Trainer):
         return {
             "generated_ids": model_generation,
             "prefix_ids": inputs['prefix_input_ids'],
+        }
+
+
+class AATTrainerSegmentation(AATTrainer):
+
+    def _get_audio_embeds_from_inputs(self, inputs):
+        # [ bs, segments_count ]
+        segments_boarders_padded = inputs['segments_boarders_padded']
+
+        batch_size = segments_boarders_padded.shape[0]
+        segments_count = segments_boarders_padded.shape[1]
+
+        # [ bs * segments_count, max_segment_waveform_frames ]
+        batched_segments = inputs['batched_segments'].flatten(0,1)
+        segments_waveforms_mask = inputs['segments_waveforms_mask'].flatten(0, 1)
+
+        # audio_hidden_states ~ [ bs * segments_count, seq_len, embedding_dim ]
+        # embeddings_attention_mask ~ [ bs * segments_count, seq_len ]
+        audio_embeds, audio_embeds_attention_mask = self.model.encode_audio(batched_segments, segments_waveforms_mask)
+        
+        assert audio_embeds.shape[1] == self.model.config.hubert_embeddings_length_for_longest_audio_segment
+
+        assert not audio_embeds.isnan().any()
+
+        assert audio_embeds.shape[0] == audio_embeds_attention_mask.shape[0]
+        assert audio_embeds.shape[1] == audio_embeds_attention_mask.shape[1]
+
+        return audio_embeds, audio_embeds_attention_mask
+
+    def _prepare_inputs(self, inputs: Dict[str, Union[torch.Tensor, Any]]) -> Dict[str, Union[torch.Tensor, Any]]:
+        """
+        Prepare `inputs` before feeding them to the model, converting them to tensors if they are not already and
+        handling potential state.
+        """
+
+        audio_embeds, audio_embeds_attention_mask = self._get_audio_embeds_from_inputs(inputs)
+
+        inputs_ids = inputs['input_ids'].to(self.args.device)
+        inputs_embeds = self.model.encode_text(inputs_ids)
+        attention_mask = inputs['attention_mask'].to(self.args.device)
+
+        model_inputs_with_audio = self.model.prepare_audio_inputs(
+            inputs_embeds=inputs_embeds,
+            attention_mask=attention_mask,
+            audio_embeds=audio_embeds,
+            audio_embeds_attention_mask=audio_embeds_attention_mask,
+            segments_count=inputs.get('segments_count', None),
+            # TODO is it OK
+            segments_boarders_attention_mask=inputs['segments_boarders_attention_mask'],
+        )
+
+        return {
+            "input_ids": inputs_ids,
+            "input_ids_attention_mask": inputs['input_ids_attention_mask'].to(self.args.device),
+            "audio_embeds": model_inputs_with_audio['audio_embeds'],
+            "audio_embeds_attention_mask": model_inputs_with_audio['audio_embeds_attention_mask'],
+            "inputs_embeds":  model_inputs_with_audio["inputs_embeds"],
+            "attention_mask": model_inputs_with_audio["attention_mask"],
+            "prefix_input_ids": inputs['prefix_input_ids'].to(self.args.device),
         }

@@ -85,7 +85,7 @@ class ComputeMetrics():
             wer_score = wer_compute.compute(predictions=generations, references=wer_references)
 
         validation_metrics = {
-            "validation/wer": wer_score
+            "wer": wer_score
         }
 
         try:
@@ -93,12 +93,12 @@ class ComputeMetrics():
                 evaluate_bleu_results = captioning_metrics.compute(predictions=generations, references=references)
                 logger.info(f"evaluate_bleu_results {evaluate_bleu_results}")
 
-                validation_metrics["validation/evaluate_bleu"] = evaluate_bleu_results['bleu'] * 100
-                validation_metrics["validation/evaluate_rouge1"] = evaluate_bleu_results['rouge1']
-                validation_metrics["validation/evaluate_rouge2"] = evaluate_bleu_results['rouge2']
-                validation_metrics["validation/evaluate_rougeL"] = evaluate_bleu_results['rougeL']
-                validation_metrics["validation/evaluate_rougeLsum"] = evaluate_bleu_results['rougeLsum']
-                validation_metrics["validation/evaluate_meteor"] = evaluate_bleu_results['meteor']
+                validation_metrics["evaluate_bleu"] = evaluate_bleu_results['bleu'] * 100
+                validation_metrics["evaluate_rouge1"] = evaluate_bleu_results['rouge1']
+                validation_metrics["evaluate_rouge2"] = evaluate_bleu_results['rouge2']
+                validation_metrics["evaluate_rougeL"] = evaluate_bleu_results['rougeL']
+                validation_metrics["evaluate_rougeLsum"] = evaluate_bleu_results['rougeLsum']
+                validation_metrics["evaluate_meteor"] = evaluate_bleu_results['meteor']
         except Exception as e:
             print("Catch eval exception", e)
 

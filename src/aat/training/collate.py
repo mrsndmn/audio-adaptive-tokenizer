@@ -28,29 +28,7 @@ PREFIXES = [
 ]
 
 
-class TokenizedAudioWaveformCollator():
-
-    def __init__(self, train_config: TrainConfig, audio_tokenizer: AdaptiveAudioAmplitudeTokenizer, tokenizer, sampling_rate: int, max_segment_waveform_frames: int, n_words=None, noise_augmentation: bool = True):
-
-
-        self.train_config = train_config
-        self.sampling_rate = sampling_rate
-
-        assert self.train_config.segmentation != SegmentationType.none
-
-        self.n_words = n_words
-
-        self.max_segment_waveform_frames = max_segment_waveform_frames
-
-        self.noise_augmentation = noise_augmentation
-
-        self.audio_tokenizer = audio_tokenizer
-        self.tokenizer = tokenizer
-
-        self.audio_processor = AutoProcessor.from_pretrained("facebook/hubert-large-ls960-ft")
-
-        return
-
+class PadWaveformsMixin():
     def pad_waveforms(self, waveforms_padding_list: List) -> Dict:
         assert len(waveforms_padding_list[0].shape) == 1, 'channel dim is not supported for waveform'
         max_len = max(x.shape[-1] for x in waveforms_padding_list)
@@ -68,6 +46,30 @@ class TokenizedAudioWaveformCollator():
             "attention_mask": attention_mask,
         }
 
+
+class TokenizedAudioWaveformCollator(PadWaveformsMixin):
+
+    def __init__(self, segmentation, train_config: TrainConfig, audio_tokenizer: AdaptiveAudioAmplitudeTokenizer, tokenizer, n_words=None, noise_augmentation: bool = True, uniform_segmentation_frames_per_segment=None):
+        self.train_config = train_config
+        
+        self.segmentation = segmentation
+        self.uniform_segmentation_frames_per_segment = uniform_segmentation_frames_per_segment
+
+        assert self.segmentation != SegmentationType.none
+
+        self.n_words = n_words
+
+        self.max_segment_waveform_frames = audio_tokenizer.max_segment_frames
+        self.sampling_rate = audio_tokenizer.sampling_rate
+
+        self.noise_augmentation = noise_augmentation
+
+        self.audio_tokenizer = audio_tokenizer
+        self.tokenizer = tokenizer
+
+        self.audio_processor = AutoProcessor.from_pretrained("facebook/hubert-large-ls960-ft")
+
+        return
 
     def __call__(self, items):
 
@@ -94,28 +96,22 @@ class TokenizedAudioWaveformCollator():
             if self.noise_augmentation:
                 waveform += np.random.rand(waveform.shape[-1]) * random.randint(1, 50) / 1000
 
-            waveform_offset = 0
-            if self.train_config.segment_boarders_noize:
-                assert self.train_config.segmentation == SegmentationType.uniform, 'uniform segmentaion'
-                waveform_offset = random.randint(0, int(self.train_config.uniform_segmentation_frames_per_segment // 2))
-                waveform = waveform[waveform_offset:]
-
             waveform_num_frames = waveform.shape[-1]
 
-            if self.train_config.segmentation == SegmentationType.uniform:
-                num_segments = waveform_num_frames // self.train_config.uniform_segmentation_frames_per_segment
-                segments_list = [ self.train_config.uniform_segmentation_frames_per_segment ] * num_segments
+            if self.segmentation == SegmentationType.uniform:
+                num_segments = waveform_num_frames // self.uniform_segmentation_frames_per_segment
+                segments_list = [ self.uniform_segmentation_frames_per_segment ] * num_segments
 
-                if waveform_num_frames % self.train_config.uniform_segmentation_frames_per_segment > 0:
+                if waveform_num_frames % self.uniform_segmentation_frames_per_segment > 0:
                     segments_list.append(waveform_num_frames -  sum(segments_list))
 
                 frames_boarders_raw = np.array(segments_list)
                 frames_boarders = frames_boarders_raw.cumsum()
-            elif self.train_config.segmentation == SegmentationType.uniform:
+            elif self.segmentation == SegmentationType.adaptive:
                 frames_boarders_raw = np.array(item['segment_frames'])
                 frames_boarders = frames_boarders_raw.cumsum()
             else:
-                raise ValueError(f"Unhandled seglent projection type: {self.train_config.segmentation}")
+                raise ValueError(f"Unhandled seglent projection type: {self.segmentation}")
 
             assert frames_boarders_raw.sum() == waveform_num_frames
 
@@ -132,7 +128,7 @@ class TokenizedAudioWaveformCollator():
                 words = words[word_start_idx:word_end_idx]
 
                 waveform_start_frame = int(item['word_start'][word_start_idx] * self.sampling_rate)
-                waveform_end_frame   = int(item['word_end'][word_end_idx-1] * self.sampling_rate) - waveform_offset
+                waveform_end_frame   = int(item['word_end'][word_end_idx-1] * self.sampling_rate)
 
                 frames_boarders_with_zero = np.insert(frames_boarders, 0, [ 0 ])
 
@@ -250,6 +246,7 @@ class TokenizedAudioWaveformCollator():
 
         result['batched_segments'] = segments_padded_normalized_with_mask.input_values.reshape(batch_size, segments_count, max_segment_waveform_frames)
         result['segments_waveforms_mask'] = segments_padded_normalized_with_mask.attention_mask.reshape(batch_size, segments_count, max_segment_waveform_frames)
+        result['segments_count'] = segments_count
 
         assert not result['batched_segments'].isnan().any()
         assert not result['segments_waveforms_mask'].isnan().any()
@@ -258,7 +255,7 @@ class TokenizedAudioWaveformCollator():
 
 
 
-class NoSegmentationAudioWaveformCollator():
+class NoSegmentationAudioWaveformCollator(PadWaveformsMixin):
 
     def __init__(self, train_config: TrainConfig, tokenizer):
 
@@ -270,24 +267,6 @@ class NoSegmentationAudioWaveformCollator():
         self.audio_processor = AutoProcessor.from_pretrained("facebook/hubert-large-ls960-ft")
 
         return
-
-    def pad_waveforms(self, waveforms_padding_list: List) -> Dict:
-        assert len(waveforms_padding_list[0].shape) == 1, 'channel dim is not supported for waveform'
-        max_len = max(x.shape[-1] for x in waveforms_padding_list)
-        batch_size = len(waveforms_padding_list)
-
-        attention_mask = torch.zeros(batch_size, max_len, dtype=torch.long)
-        batched_waveform = torch.zeros(batch_size, max_len)
-
-        for i, wf in enumerate(waveforms_padding_list):
-            attention_mask[i, :wf.shape[-1]] = 1
-            batched_waveform[i, :wf.shape[-1]] = torch.from_numpy(wf)
-
-        return {
-            "input_values": batched_waveform,
-            "attention_mask": attention_mask,
-        }
-
 
     def __call__(self, items):
 

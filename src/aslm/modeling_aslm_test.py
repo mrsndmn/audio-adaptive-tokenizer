@@ -15,7 +15,6 @@ def _prepare_model():
     lm_decoder.eval()
 
     config = AslmConfig(
-        audio_encoder_type=AudioEncoderType.hubert,
         projection_type=SegmentProjectionEnum.linear,
         hubert_embeddings_length_for_longest_audio_segment=1,
         segmentation=SegmentationType.none,
@@ -54,3 +53,6 @@ def test_aslm_save_load_pretrained():
 
     for k, v in model_restored.state_dict().items():
         assert (model_state_dict[k] == v).all(), f'{k} mismatch'
+
+
+# def test_batched_waveforms_with_no_values_in_attention_mask():
