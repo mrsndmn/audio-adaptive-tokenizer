@@ -41,6 +41,9 @@ from accelerate.tracking import filter_trackers
 
 from aat.training.compute_metrics import ComputeMetrics
 
+from aslm.configuration_aslm import AslmConfig, AudioEncoderType, SegmentProjectionEnum
+
+
 import wandb
 
 
@@ -88,7 +91,7 @@ def train(
     audio_dataset = audio_dataset.shuffle(seed=42)
     
     early_stopping_callback = transformers.EarlyStoppingCallback(
-        early_stopping_patience=3,
+        early_stopping_patience=10,
         early_stopping_threshold=0.01
     )
     
@@ -174,7 +177,7 @@ def build_audio_encoder(train_config: TrainConfig, device=None):
     return model
 
 
-def build_model(train_config: TrainConfig, from_pretrained=None, device=None, hubert_embeddings_length_for_longest_audio_segment=7):
+def build_model(train_config: TrainConfig, from_pretrained=None, device=None, hubert_embeddings_length_for_longest_audio_segment=7, projection_type=SegmentProjectionEnum.linear):
 
     # lm_decoder = LlamaForCausalLM.from_pretrained("data/models/hearty-shadow-9/last")
 
@@ -194,7 +197,10 @@ def build_model(train_config: TrainConfig, from_pretrained=None, device=None, hu
         model = AslmModel.from_pretrained(from_pretrained, audio_encoder, lm_decoder)
     else:
         lm_decoder = build_lm_decoder(train_config, from_pretrained=train_config.lm_pretrained_model, device=device)
-        config = AslmConfig(hubert_embeddings_length_for_longest_audio_segment=hubert_embeddings_length_for_longest_audio_segment)
+        config = AslmConfig(
+            hubert_embeddings_length_for_longest_audio_segment=hubert_embeddings_length_for_longest_audio_segment,
+            projection_type=projection_type,
+        )
         model = AslmModel(config, audio_encoder, lm_decoder)
 
         model.reinitialize_weights()
@@ -219,6 +225,7 @@ if __name__ == '__main__':
     parser.add_argument('-t', '--test-run', action='store_true', default=False)
     parser.add_argument('-f', '--finetune', action='store_true', default=False)
     parser.add_argument('-p', '--profile', action='store_true', default=False)
+    parser.add_argument('--projection_type', default='linear')
 
     args, remainig_args = parser.parse_known_args()
 
@@ -256,9 +263,15 @@ if __name__ == '__main__':
     output_dir_base = training_args.output_dir
     
     for hubert_embeddings_length_for_longest_audio_segment in range(12, 15, 1):
-        training_args.output_dir = output_dir_base + f"_{hubert_embeddings_length_for_longest_audio_segment}"
+        training_args.output_dir = output_dir_base + f"_{hubert_embeddings_length_for_longest_audio_segment}_{args.projection_type}_{training_args.segmentation}"
 
-        model, tokenizer = build_model(train_config, device=device, from_pretrained=None, hubert_embeddings_length_for_longest_audio_segment=hubert_embeddings_length_for_longest_audio_segment)
+        model, tokenizer = build_model(
+            train_config,
+            device=device,
+            from_pretrained=None,
+            hubert_embeddings_length_for_longest_audio_segment=hubert_embeddings_length_for_longest_audio_segment,
+            projection_type=args.projection_type,
+        )
 
         logger.info("model was loaded")
 

@@ -10,19 +10,19 @@ from transformers import PreTrainedModel
 from transformers.modeling_outputs import BaseModelOutputWithPast
 
 class AudioEmbeddingsEncoderPooling(nn.Module):
-    def __init__(self, embedding_dim=512, nhead=16):
+    def __init__(self, embedding_dim=2048, hidden_dim=2048, nhead=16, out_dim=2048):
         super().__init__()
 
-        self.l_in = nn.Linear(576, embedding_dim)
+        self.l_in = nn.Linear(embedding_dim, hidden_dim)
 
         self.transformer_encoder = nn.TransformerEncoderLayer(
-            d_model=embedding_dim,
+            d_model=hidden_dim,
             nhead=nhead,
             batch_first=True,
             norm_first=False
         )
 
-        self.l_out = nn.Linear(embedding_dim, 576)
+        self.l_out = nn.Linear(hidden_dim, out_dim)
 
         self.scale = nn.Parameter(torch.tensor([1.0]))
 
@@ -33,8 +33,8 @@ class AudioEmbeddingsEncoderPooling(nn.Module):
             src_key_padding_mask=encoder_attention_mask.bool(),
         )
 
-        # [bs * segments_count, 576]
-        pooler_output = self.l_out(transformer_encoder_outputs[:, 0, :])
+        # [bs * segments_count, 1, hidden_dim]
+        pooler_output = self.l_out(transformer_encoder_outputs[:, 0:1, :])
         pooler_output = F.normalize(pooler_output, dim=-1) * self.scale
 
         return pooler_output
@@ -53,7 +53,8 @@ class AslmModel(PreTrainedModel):
         audio_encoder_hidden_size = audio_encoder.config.hidden_size
 
         if config.projection_type == SegmentProjectionEnum.transformer_encoder:
-            self.audio_embeddings_pooling = AudioEmbeddingsEncoderPooling()
+            self.audio_embeddings_pooling_cls_token = nn.Embedding(1, audio_encoder_hidden_size)
+            self.audio_embeddings_pooling = AudioEmbeddingsEncoderPooling(embedding_dim=audio_encoder_hidden_size, out_dim=lm_decoder.config.hidden_size)
         elif config.projection_type == SegmentProjectionEnum.linear:
             linear_features = audio_encoder_hidden_size * config.hubert_embeddings_length_for_longest_audio_segment
 
@@ -148,7 +149,24 @@ class AslmModel(PreTrainedModel):
 
         # todo move this cases to projection class logic
         if self.config.projection_type == SegmentProjectionEnum.transformer_encoder:
-            raise NotImplementedError
+            
+            batch_size = audio_embeds.shape[0]
+            
+            cls_tokens_tensor = torch.zeros([ batch_size ], dtype=torch.long, device=audio_embeds.device).unsqueeze(1)
+            cls_tokens_embeddings = self.audio_embeddings_pooling_cls_token(cls_tokens_tensor)
+            audio_embeds_with_cls = torch.cat([cls_tokens_embeddings, audio_embeds], dim=1)
+            
+            cls_mask_value = torch.zeros([ batch_size ], dtype=audio_embeds_attention_mask.dtype, device=audio_embeds_attention_mask.device).unsqueeze(1)
+            audio_embeds_attention_mask_with_cls = torch.cat([cls_mask_value, audio_embeds_attention_mask], dim=-1)
+
+            audio_embeds = self.audio_embeddings_pooling.forward(audio_embeds_with_cls, encoder_attention_mask=audio_embeds_attention_mask_with_cls)
+            
+            audio_embeds_attention_mask_reshaped = audio_embeds_attention_mask.reshape(batch_size, 1, -1).any(dim=-1)
+            assert audio_embeds_attention_mask_reshaped.sum() < audio_embeds_attention_mask_reshaped.numel()
+            assert audio_embeds_attention_mask_reshaped.sum() > 0
+
+            audio_embeds_attention_mask = audio_embeds_attention_mask_reshaped
+
         elif self.config.projection_type == SegmentProjectionEnum.mean:
             raise NotImplementedError
         elif self.config.projection_type == SegmentProjectionEnum.linear:
@@ -177,6 +195,9 @@ class AslmModel(PreTrainedModel):
             raise ValueError(f"unsupported projection_type: {self.config.projection_type}")
 
         audio_embeds = self.audio_encoder_dropout(audio_embeds)
+        
+        assert audio_embeds.shape[0] == audio_embeds_attention_mask.shape[0]
+        assert audio_embeds.shape[1] == audio_embeds_attention_mask.shape[1]
 
         return audio_embeds, audio_embeds_attention_mask
 

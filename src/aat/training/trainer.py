@@ -52,7 +52,7 @@ class TrainingArguments(transformers.TrainingArguments):
 
     logging_steps: int = field(default=50)
     
-    learning_rate: float = field(default=2e-4)
+    learning_rate: float = field(default=1e-4)
     
     segmentation: str = field(default="none")
 
