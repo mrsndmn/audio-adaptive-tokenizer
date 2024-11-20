@@ -184,15 +184,6 @@ class TokenizedAudioWaveformCollator(PadWaveformsMixin):
         result['prefix_attention_mask'] = torch.tensor(tokenized_caption_prefix['attention_mask'])
 
 
-        audio_preprocessed = self.pad_waveforms(
-            audio_segments_waveforms,
-        )
-
-        result['audio_input_values'] = audio_preprocessed['input_values']
-        result['audio_attention_mask'] = audio_preprocessed['attention_mask']
-        assert result['audio_input_values'].shape[1] > 0
-        assert result['audio_attention_mask'].shape[1] > 0
-
         max_len_segments_boarders = max(len(x) for x in segments_boarders)
         segments_boarders_padded = torch.zeros([ result['attention_mask'].shape[0], max_len_segments_boarders ], dtype=torch.long)
         segments_boarders_attention_mask = torch.zeros_like(segments_boarders_padded)
@@ -212,40 +203,32 @@ class TokenizedAudioWaveformCollator(PadWaveformsMixin):
 
         max_segment_waveform_frames = self.max_segment_waveform_frames
 
-        # batched_segments = torch.zeros([batch_size, segments_count, max_segment_waveform_frames])
-        # segments_waveforms_mask = torch.zeros_like(batched_segments)
-        # for batch_i in range(batch_size):
-        #     prev_segment_boarder = 0
-        #     for segment_i in range(segments_count):
-        #         segment_boarder = segments_boarders_padded[batch_i, segment_i]
-        #         if segment_i > 0 and segment_boarder == 0:
-        #             break
-        #         segment_waveform = result['audio_input_values'][batch_i, prev_segment_boarder:segment_boarder]
-        #         batched_segments[batch_i, segment_i, :segment_waveform.shape[0]] = segment_waveform
-        #         segments_waveforms_mask[batch_i, segment_i, :segment_waveform.shape[0]] = 1
-        #         prev_segment_boarder = segment_boarder
+        audio_processed_output = self.audio_processor(audio_segments_waveforms, padding=True, return_tensors="pt", sampling_rate=self.train_config.sampling_rate)
 
-        segments_for_padding = []
+        audio_input_values = audio_processed_output.input_values
+        audio_attention_mask = audio_processed_output.attention_mask
+        
+        assert audio_input_values.shape[1] > 0
+        assert audio_attention_mask.shape[1] > 0
+
+        batched_segments = torch.zeros([batch_size, segments_count, max_segment_waveform_frames])
+        segments_waveforms_mask = torch.zeros([batch_size, segments_count, max_segment_waveform_frames])
         for batch_i in range(batch_size):
             prev_segment_boarder = 0
             for segment_i in range(segments_count):
                 segment_boarder = segments_boarders_padded[batch_i, segment_i]
                 if segment_i > 0 and segment_boarder == 0:
-                    segments_for_padding.append([])
                     continue
 
-                segment_waveform = result['audio_input_values'][batch_i, prev_segment_boarder:segment_boarder]
-                assert segment_waveform.shape[-1] > 0, f"{prev_segment_boarder}:{segment_boarder}, {segments_boarders_padded[batch_i]}"
+                assert prev_segment_boarder < segment_boarder
+                segment_length = segment_boarder - prev_segment_boarder
+                batched_segments[batch_i, segment_i, :segment_length] = audio_input_values[batch_i, prev_segment_boarder:segment_boarder]
+                segments_waveforms_mask[batch_i, segment_i, :segment_length] = 1
 
-                segments_for_padding.append(segment_waveform.numpy())
                 prev_segment_boarder = segment_boarder
 
-        segments_padded_normalized_with_mask = self.audio_processor(segments_for_padding, return_tensors="pt", padding=PaddingStrategy.MAX_LENGTH, max_length=max_segment_waveform_frames, sampling_rate=self.train_config.sampling_rate)
-
-        assert segments_padded_normalized_with_mask.input_values.shape == torch.Size([batch_size * segments_count, max_segment_waveform_frames])
-
-        result['batched_segments'] = segments_padded_normalized_with_mask.input_values.reshape(batch_size, segments_count, max_segment_waveform_frames)
-        result['segments_waveforms_mask'] = segments_padded_normalized_with_mask.attention_mask.reshape(batch_size, segments_count, max_segment_waveform_frames)
+        result['batched_segments'] = batched_segments
+        result['segments_waveforms_mask'] = segments_waveforms_mask
         result['segments_count'] = segments_count
 
         assert not result['batched_segments'].isnan().any()

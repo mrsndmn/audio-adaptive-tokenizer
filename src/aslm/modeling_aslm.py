@@ -10,24 +10,27 @@ from transformers import PreTrainedModel
 from transformers.modeling_outputs import BaseModelOutputWithPast
 
 class AudioEmbeddingsEncoderPooling(nn.Module):
-    def __init__(self, embedding_dim=2048, hidden_dim=2048, nhead=16, out_dim=2048):
+    def __init__(self, embedding_dim=2048, hidden_dim=4096, nhead=16, out_dim=2048):
         super().__init__()
 
         self.l_in = nn.Linear(embedding_dim, hidden_dim)
+        
+        self.layer_norm_in = nn.LayerNorm(hidden_dim)
 
         self.transformer_encoder = nn.TransformerEncoderLayer(
             d_model=hidden_dim,
             nhead=nhead,
             batch_first=True,
-            norm_first=False
+            norm_first=True
         )
 
         self.l_out = nn.Linear(hidden_dim, out_dim)
 
-        self.scale = nn.Parameter(torch.tensor([1.0]))
-
     def forward(self, inputs_embeds, encoder_attention_mask):
         projected_inputs = self.l_in(inputs_embeds)
+        
+        projected_inputs = self.layer_norm_in(projected_inputs)
+        
         transformer_encoder_outputs = self.transformer_encoder(
             src=projected_inputs,
             src_key_padding_mask=encoder_attention_mask.bool(),
@@ -35,7 +38,7 @@ class AudioEmbeddingsEncoderPooling(nn.Module):
 
         # [bs * segments_count, 1, hidden_dim]
         pooler_output = self.l_out(transformer_encoder_outputs[:, 0:1, :])
-        pooler_output = F.normalize(pooler_output, dim=-1) * self.scale
+        pooler_output = F.normalize(pooler_output, dim=-1)
 
         return pooler_output
 
@@ -174,6 +177,7 @@ class AslmModel(PreTrainedModel):
 
             seq_len = audio_embeds.shape[1]
             batch_size = audio_embeds.shape[0]
+            assert seq_len == self.config.hubert_embeddings_length_for_longest_audio_segment, "is expected for segmented training"
             cropped_seq_len = seq_len - (seq_len % self.config.hubert_embeddings_length_for_longest_audio_segment)
             redused_seq_len = cropped_seq_len // self.config.hubert_embeddings_length_for_longest_audio_segment
             audio_hidden_states_cropped = audio_embeds[:, :cropped_seq_len, :]

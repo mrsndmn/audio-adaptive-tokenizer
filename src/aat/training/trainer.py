@@ -46,11 +46,11 @@ class TrainingArguments(transformers.TrainingArguments):
     eval_steps: int = field(default=500)
     eval_strategy: str = field(default='steps')
     
-    save_total_limit: int = field(default=3)
+    save_total_limit: int = field(default=2)
     save_steps: int = field(default=500)
     load_best_model_at_end: bool =  field(default=True)
 
-    logging_steps: int = field(default=50)
+    logging_steps: int = field(default=10)
     
     learning_rate: float = field(default=1e-4)
     

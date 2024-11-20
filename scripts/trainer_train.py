@@ -91,7 +91,7 @@ def train(
     audio_dataset = audio_dataset.shuffle(seed=42)
     
     early_stopping_callback = transformers.EarlyStoppingCallback(
-        early_stopping_patience=10,
+        early_stopping_patience=20,
         early_stopping_threshold=0.01
     )
     
@@ -104,20 +104,21 @@ def train(
             train_dataset=audio_dataset,
             eval_dataset=audio_dataset_val,
             compute_metrics=ComputeMetrics(tokenizer),
-            callbacks=[ early_stopping_callback ],
+            # callbacks=[ early_stopping_callback ],
         )
     elif training_args.segmentation == "uniform":
-        audio_tokenizer = AdaptiveAudioAmplitudeTokenizer()
+        uniform_segmentation_frames_per_segment = 4000
+        audio_tokenizer = AdaptiveAudioAmplitudeTokenizer(max_segment_duration_milliseconds=(uniform_segmentation_frames_per_segment * 1000 // train_config.sampling_rate))
         
         trainer = AATTrainerSegmentation(
             model,
             training_args,
             processing_class=tokenizer,
-            data_collator=TokenizedAudioWaveformCollator(training_args.segmentation, train_config, audio_tokenizer, tokenizer, uniform_segmentation_frames_per_segment=3200),
+            data_collator=TokenizedAudioWaveformCollator(training_args.segmentation, train_config, audio_tokenizer, tokenizer, uniform_segmentation_frames_per_segment=uniform_segmentation_frames_per_segment),
             train_dataset=audio_dataset,
             eval_dataset=audio_dataset_val,
             compute_metrics=ComputeMetrics(tokenizer),
-            callbacks=[ early_stopping_callback ],
+            # callbacks=[ early_stopping_callback ],
         )
     elif training_args.segmentation == "adaptive":
         raise NotImplementedError()
@@ -165,12 +166,12 @@ def build_lm_decoder(train_config: TrainConfig, from_pretrained=None, device=Non
 def build_audio_encoder(train_config: TrainConfig, device=None):
 
     kwargs = dict()
-    if device is not None and 'cuda' in str(device):
-        kwargs['torch_dtype'] = torch.float16
-        kwargs['attn_implementation'] = "flash_attention_2"
+    # if device is not None and 'cuda' in str(device):
+    #     kwargs['torch_dtype'] = torch.float16
+    #     kwargs['attn_implementation'] = "flash_attention_2"
 
     model = HubertModel.from_pretrained("facebook/hubert-large-ls960-ft", mask_time_prob=0.0, **kwargs)
-    model.eval()
+    # model.eval()
 
     model = model.to(device)
 
@@ -262,49 +263,49 @@ if __name__ == '__main__':
     
     output_dir_base = training_args.output_dir
     
-    for hubert_embeddings_length_for_longest_audio_segment in range(12, 15, 1):
-        training_args.output_dir = output_dir_base + f"_{hubert_embeddings_length_for_longest_audio_segment}_{args.projection_type}_{training_args.segmentation}"
+    hubert_embeddings_length_for_longest_audio_segment = 12
+    training_args.output_dir = output_dir_base + f"_{hubert_embeddings_length_for_longest_audio_segment}_{args.projection_type}_{training_args.segmentation}"
 
-        model, tokenizer = build_model(
-            train_config,
-            device=device,
-            from_pretrained=None,
-            hubert_embeddings_length_for_longest_audio_segment=hubert_embeddings_length_for_longest_audio_segment,
-            projection_type=args.projection_type,
+    model, tokenizer = build_model(
+        train_config,
+        device=device,
+        from_pretrained=None,
+        hubert_embeddings_length_for_longest_audio_segment=hubert_embeddings_length_for_longest_audio_segment,
+        projection_type=args.projection_type,
+    )
+
+    logger.info("model was loaded")
+
+    # Initialise your wandb run, passing wandb parameters and any config information
+
+    trainable_parameters_count = sum(p.numel() for p in model.parameters() if p.requires_grad)
+    total_parameters_count = sum(p.numel() for p in model.parameters())
+    logger.info(f"trainable model parameters: {trainable_parameters_count}")
+    logger.info(f"total model parameters: {total_parameters_count}")
+
+    os.environ["TOKENIZERS_PARALLELISM"] = "false"
+
+    def run_training():
+        train(
+            model=model,
+            tokenizer=tokenizer,
+            train_config=train_config,
+            training_args=training_args,
         )
 
-        logger.info("model was loaded")
+    if args.profile:
+        logger.info("Run training with profiling")
+        with cProfile.Profile() as pr:
 
-        # Initialise your wandb run, passing wandb parameters and any config information
-
-        trainable_parameters_count = sum(p.numel() for p in model.parameters() if p.requires_grad)
-        total_parameters_count = sum(p.numel() for p in model.parameters())
-        logger.info(f"trainable model parameters: {trainable_parameters_count}")
-        logger.info(f"total model parameters: {total_parameters_count}")
-
-        os.environ["TOKENIZERS_PARALLELISM"] = "false"
-
-        def run_training():
-            train(
-                model=model,
-                tokenizer=tokenizer,
-                train_config=train_config,
-                training_args=training_args,
-            )
-
-        if args.profile:
-            logger.info("Run training with profiling")
-            with cProfile.Profile() as pr:
-
-                if train_config.optim_lm:
+            if train_config.optim_lm:
+                run_training()
+            else:
+                with autocast(dtype=torch.bfloat16):
                     run_training()
-                else:
-                    with autocast(dtype=torch.bfloat16):
-                        run_training()
 
-                profile_file_name = "train_profile.prof"
-                logger.info(f"Save profile: {profile_file_name}")
-                pr.dump_stats(profile_file_name)
-        else:
-            run_training()
+            profile_file_name = "train_profile.prof"
+            logger.info(f"Save profile: {profile_file_name}")
+            pr.dump_stats(profile_file_name)
+    else:
+        run_training()
 
