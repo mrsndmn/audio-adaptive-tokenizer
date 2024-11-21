@@ -43,7 +43,6 @@ class TrainConfig(BaseExperiment):
     lm_flash_attention: bool = False
     optim_lm: bool = True
     unfreeze_lm_at_epoch: Optional[int]
-    optim_audio_encoder: bool = False
 
     # Data
     few_train_samples: Optional[int] = 100
@@ -78,7 +77,6 @@ def overfit_one_batch_train_config():
         optim_lm = False,
         lm_flash_attention = True,
         unfreeze_lm_at_epoch = None,
-        optim_audio_encoder = False,
 
         segment_projection = SegmentProjectionEnum.linear,
 
@@ -107,7 +105,6 @@ def projection_training():
         optim_lm = False,
         lm_flash_attention = False,
         unfreeze_lm_at_epoch = None,
-        optim_audio_encoder = False,
 
         segment_projection = SegmentProjectionEnum.linear,
 
@@ -134,7 +131,6 @@ def finetuning_lm():
         optim_lm = True,
         lm_flash_attention = False,
         unfreeze_lm_at_epoch = None,
-        optim_audio_encoder = False,
 
         segment_projection = SegmentProjectionEnum.linear,
         # segmentation = SegmentationType.uniform,

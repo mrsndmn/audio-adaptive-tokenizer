@@ -58,16 +58,16 @@ def train(
         training_args: TrainingArguments,
         ):
 
-    # audio_dataset = datasets.load_dataset("nguyenvulebinh/asr-alignment", 'libris')
-    # audio_dataset_val = audio_dataset['valid'].select(range(60))
-    # audio_dataset =  audio_dataset['train']
-    # audio_dataset = audio_dataset.shuffle(seed=42)
-
-    audio_dataset = datasets.load_from_disk(train_config.train_dataset_path)
-    audio_dataset = audio_dataset.shuffle(seed=42)
-    audio_dataset_val = datasets.load_from_disk(train_config.validation_dataset_path)
-    audio_dataset_val = audio_dataset_val.select(range(60))
-
+    if training_args.segmentation == SegmentationType.adaptive.value:
+        audio_dataset = datasets.load_from_disk(train_config.train_dataset_path)
+        audio_dataset = audio_dataset.shuffle(seed=42)
+        audio_dataset_val = datasets.load_from_disk(train_config.validation_dataset_path)
+        audio_dataset_val = audio_dataset_val.select(range(60))
+    else:
+        audio_dataset = datasets.load_dataset("nguyenvulebinh/asr-alignment", 'libris')
+        audio_dataset_val = audio_dataset['valid'].select(range(60))
+        audio_dataset =  audio_dataset['train']
+        audio_dataset = audio_dataset.shuffle(seed=42)
     
     early_stopping_callback = transformers.EarlyStoppingCallback(
         early_stopping_patience=20,
@@ -88,21 +88,25 @@ def train(
     elif training_args.segmentation == SegmentationType.uniform:
         
         # audio_encoder_embeddings_seq_len
-        uniform_segmentation_frames_per_segment = 3200
-        audio_tokenizer = AdaptiveAudioAmplitudeTokenizer(max_segment_duration_milliseconds=(uniform_segmentation_frames_per_segment * 1000 // train_config.sampling_rate))
+        max_segment_frames = training_args.max_segment_frames
+        max_segment_duration_milliseconds=(max_segment_frames * 1000 // train_config.sampling_rate)
+        audio_tokenizer = AdaptiveAudioAmplitudeTokenizer(max_segment_duration_milliseconds=(max_segment_frames * 1000 // train_config.sampling_rate))
         
         trainer = AATTrainerSegmentation(
             model,
             training_args,
             processing_class=tokenizer,
-            data_collator=TokenizedAudioWaveformCollator(training_args.segmentation, train_config, audio_tokenizer, tokenizer, uniform_segmentation_frames_per_segment=uniform_segmentation_frames_per_segment),
+            data_collator=TokenizedAudioWaveformCollator(training_args.segmentation, train_config, audio_tokenizer, tokenizer, uniform_segmentation_frames_per_segment=max_segment_frames),
             train_dataset=audio_dataset,
             eval_dataset=audio_dataset_val,
             compute_metrics=ComputeMetrics(tokenizer),
             # callbacks=[ early_stopping_callback ],
         )
     elif training_args.segmentation == SegmentationType.adaptive:
-        audio_tokenizer = AdaptiveAudioAmplitudeTokenizer()
+        
+        max_segment_frames = training_args.max_segment_frames
+        max_segment_duration_milliseconds=(max_segment_frames * 1000 // train_config.sampling_rate)
+        audio_tokenizer = AdaptiveAudioAmplitudeTokenizer(max_segment_duration_milliseconds=max_segment_duration_milliseconds)
 
         trainer = AATTrainerSegmentation(
             model,
@@ -127,6 +131,8 @@ def train(
     )
 
     trainer.train()
+
+    breakpoint()
     
     trainer.accelerator.end_training()
 
@@ -212,7 +218,7 @@ def build_model(train_config: TrainConfig, training_args: TrainingArguments, fro
 
     model.to(device)
 
-    if not train_config.optim_audio_encoder:
+    if not training_args.train_audio_encoder:
         freeze_model(model.audio_encoder)
 
     if not train_config.optim_lm:

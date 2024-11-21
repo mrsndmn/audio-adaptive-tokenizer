@@ -64,6 +64,7 @@ class TrainingArguments(transformers.TrainingArguments):
     train_audio_encoder: bool =  field(default=True)
     audio_encoder_type: AudioEncoderType =  field(default="hubert")
     audio_encoder_embeddings_seq_len: int = field(default=1)
+    max_segment_frames: Optional[int] = field(default=4000)
 
 class AATTrainer(Trainer):
 
@@ -224,19 +225,20 @@ class AATTrainer(Trainer):
     def training_step(self, model: AslmModel, *args, **kwargs):
         result = super().training_step(model, *args, **kwargs)
         
-        
         audio_encdoer_grad = None
         if hasattr(model.audio_encoder, 'feature_projection'):
             audio_encdoer_grad = model.audio_encoder.feature_projection.projection.weight.grad
         elif hasattr(model.audio_encoder, 'efficient_net'):
             audio_encdoer_grad = model.audio_encoder.efficient_net._conv_head.weight.grad
 
-
+        if self.args.train_audio_encoder:
+            assert audio_encdoer_grad is not None, "audio_encdoer_grad is expected to be not none"
+            
         audio_tokens_emb_grad = model.audio_tokens_embeddings.weight.grad
         
         extra_log = dict()
         if audio_encdoer_grad is not None:
-            extra_log["train/hubert_projection_grad_norm"] = audio_encdoer_grad.norm(2)
+            extra_log["train/audio_encdoer_grad_norm"] = audio_encdoer_grad.norm(2)
 
         if audio_tokens_emb_grad is not None:
             extra_log["train/audio_tokens_emb_grad"] = audio_tokens_emb_grad.norm(2)

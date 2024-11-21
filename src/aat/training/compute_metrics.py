@@ -18,7 +18,7 @@ class ComputeMetrics():
         return
     
     @cached_property
-    def compute_validation_metrics(self):
+    def captioning_metrics(self):
         return evaluate.combine(
             [
                 evaluate.load("bleu", keep_in_memory=True),
