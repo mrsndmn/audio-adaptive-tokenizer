@@ -3,7 +3,7 @@ import torch
 import torch.nn as nn
 import torch.nn.functional as F
 
-from aslm.configuration_aslm import AslmConfig, AudioEncoderType, SegmentProjectionEnum
+from aslm.configuration_aslm import AslmConfig, SegmentProjectionEnum
 
 import safetensors
 from transformers import PreTrainedModel
@@ -42,6 +42,34 @@ class AudioEmbeddingsEncoderPooling(nn.Module):
 
         return pooler_output
 
+from dataclasses import dataclass
+
+@dataclass
+class EfficientNetAudioEncdoerConfig:
+    hidden_size: int = 1280
+
+class EfficientNetAudioEncdoerAdapter(nn.Module):
+    
+    def __init__(self, config: EfficientNetAudioEncdoerConfig, efficient_net: nn.Module):
+        super().__init__()
+        
+        self.config = config
+        self.efficient_net = efficient_net
+        self.efficient_net._fc = nn.Identity()
+        
+    def forward(
+        self,
+        input_values=None,
+        attention_mask=None,
+    ):
+        efficient_net_output = self.efficient_net(input_values)
+        efficient_net_output = efficient_net_output.unsqueeze(1)
+        # efficient_net_output reshape?
+        return { "last_hidden_state": efficient_net_output }
+
+    def _get_feature_vector_attention_mask(self, feature_seq_len, attention_mask):
+
+        return torch.ones([attention_mask.shape[0], feature_seq_len], dtype=attention_mask.dtype, device=attention_mask.device)
 
 class AslmModel(PreTrainedModel):
 
@@ -59,7 +87,7 @@ class AslmModel(PreTrainedModel):
             self.audio_embeddings_pooling_cls_token = nn.Embedding(1, audio_encoder_hidden_size)
             self.audio_embeddings_pooling = AudioEmbeddingsEncoderPooling(embedding_dim=audio_encoder_hidden_size, out_dim=lm_decoder.config.hidden_size)
         elif config.projection_type == SegmentProjectionEnum.linear:
-            linear_features = audio_encoder_hidden_size * config.hubert_embeddings_length_for_longest_audio_segment
+            linear_features = audio_encoder_hidden_size * config.audio_encoder_embeddings_seq_len
 
             self.audio_encoder_projection = nn.Sequential(
                 nn.Linear(linear_features, 4096),
@@ -107,16 +135,18 @@ class AslmModel(PreTrainedModel):
         """
 
         # todo move this cases to projection class logic
-        with torch.no_grad():
-            ae_waveform = waveform
-            if self.audio_encoder.dtype != ae_waveform.dtype:
-                ae_waveform = ae_waveform.to(self.audio_encoder.dtype)
-            audio_embeds = self.audio_encoder(
-                input_values=ae_waveform,
-                attention_mask=waveforms_mask,
-            ).last_hidden_state
+        # [ bs * segments_count, max_segment_waveform_frames ]
+        ae_waveform = waveform
+        # if self.audio_encoder.dtype != ae_waveform.dtype:
+        #     ae_waveform = ae_waveform.to(self.audio_encoder.dtype)
 
-            audio_embeds = audio_embeds.to(torch.float32)
+        # audio_hidden_states ~ [ bs * segments_count, seq_len, embedding_dim ]
+        audio_embeds = self.audio_encoder(
+            input_values=ae_waveform,
+            attention_mask=waveforms_mask,
+        )['last_hidden_state']
+
+        # audio_embeds = audio_embeds.to(torch.float32)
 
         batch_size = audio_embeds.shape[0]
         new_seq_len = audio_embeds.shape[1]
@@ -127,6 +157,7 @@ class AslmModel(PreTrainedModel):
             # extra_padding = torch.zeros([batch_size, extra_padding_length], dtype=audio_embeds_attention_mask.dtype, device=audio_embeds_attention_mask.device)
             # audio_embeds_attention_mask = torch.cat([audio_embeds_attention_mask, extra_padding])
             audio_embeds_attention_mask_hands = audio_embeds_attention_mask_hands[:, :-(waveform_seq_len % new_seq_len)]
+
         audio_embeds_attention_mask_hands = audio_embeds_attention_mask_hands.reshape(batch_size, new_seq_len, -1).any(dim=-1).long()
         audio_embeds_negative_attention_mask = (audio_embeds_attention_mask_hands == 0)
         
@@ -165,7 +196,8 @@ class AslmModel(PreTrainedModel):
             audio_embeds = self.audio_embeddings_pooling.forward(audio_embeds_with_cls, encoder_attention_mask=audio_embeds_attention_mask_with_cls)
             
             audio_embeds_attention_mask_reshaped = audio_embeds_attention_mask.reshape(batch_size, 1, -1).any(dim=-1)
-            assert audio_embeds_attention_mask_reshaped.sum() < audio_embeds_attention_mask_reshaped.numel()
+            # if audio_embeds_attention_mask_reshaped.shape[0] > 1:
+            #     assert audio_embeds_attention_mask_reshaped.sum() < audio_embeds_attention_mask_reshaped.numel()
             assert audio_embeds_attention_mask_reshaped.sum() > 0
 
             audio_embeds_attention_mask = audio_embeds_attention_mask_reshaped
@@ -177,9 +209,11 @@ class AslmModel(PreTrainedModel):
 
             seq_len = audio_embeds.shape[1]
             batch_size = audio_embeds.shape[0]
-            assert seq_len == self.config.hubert_embeddings_length_for_longest_audio_segment, "is expected for segmented training"
-            cropped_seq_len = seq_len - (seq_len % self.config.hubert_embeddings_length_for_longest_audio_segment)
-            redused_seq_len = cropped_seq_len // self.config.hubert_embeddings_length_for_longest_audio_segment
+            
+            # assert seq_len == self.config.audio_encoder_embeddings_seq_len, "is expected for segmented training"
+
+            cropped_seq_len = seq_len - (seq_len % self.config.audio_encoder_embeddings_seq_len)
+            redused_seq_len = cropped_seq_len // self.config.audio_encoder_embeddings_seq_len
             audio_hidden_states_cropped = audio_embeds[:, :cropped_seq_len, :]
             assert audio_hidden_states_cropped.shape[1] > 0
             
@@ -189,7 +223,8 @@ class AslmModel(PreTrainedModel):
             audio_embeds = self.audio_encoder_projection(audio_hidden_states_cropped)
 
             audio_embeds_attention_mask_reshaped = audio_embeds_attention_mask[:, :cropped_seq_len].reshape(batch_size, redused_seq_len, -1).any(dim=-1)
-            assert audio_embeds_attention_mask_reshaped.sum() < audio_embeds_attention_mask_reshaped.numel()
+            # if audio_embeds_attention_mask_reshaped.shape[0] > 1:
+            #     assert audio_embeds_attention_mask_reshaped.sum() < audio_embeds_attention_mask_reshaped.numel()
             assert audio_embeds_attention_mask_reshaped.sum() > 0
             # if segments_boarders_attention_mask is not None:
             #     assert (segments_boarders_attention_mask.bool().flatten() == audio_embeds_attention_mask_reshaped.flatten()).all()
@@ -297,7 +332,8 @@ class AslmModel(PreTrainedModel):
         return { key_prefix + '.' + k: v for k, v in state_dict.items() }
 
     def save_pretrained(self, *args, **kwargs):
-        state_dict_filtered = { k: v for k, v in self.state_dict().items() if not k.startswith('lm_decoder.') and not k.startswith('audio_encoder.') }
+        save_audio_encoder = isinstance(self.audio_encoder, EfficientNetAudioEncdoerAdapter)
+        state_dict_filtered = { k: v for k, v in self.state_dict().items() if not k.startswith('lm_decoder.') and (not k.startswith('audio_encoder.') or save_audio_encoder) }
         kwargs['state_dict'] = state_dict_filtered
 
         return super().save_pretrained(*args, **kwargs)

@@ -13,6 +13,8 @@ import random
 
 from transformers.utils import PaddingStrategy
 
+from transformers.audio_utils import mel_filter_bank, spectrogram, window_function
+
 
 PREFIXES = [
     "The audio transcription states:",
@@ -49,7 +51,21 @@ class PadWaveformsMixin():
 
 class TokenizedAudioWaveformCollator(PadWaveformsMixin):
 
-    def __init__(self, segmentation, train_config: TrainConfig, audio_tokenizer: AdaptiveAudioAmplitudeTokenizer, tokenizer, n_words=None, noise_augmentation: bool = True, uniform_segmentation_frames_per_segment=None):
+    def __init__(self,
+                 segmentation,
+                 train_config: TrainConfig,
+                 audio_tokenizer: AdaptiveAudioAmplitudeTokenizer,
+                 tokenizer,
+                 n_words=None,
+                 noise_augmentation: bool = False,
+                 uniform_segmentation_frames_per_segment=None,
+                 feature_size=64,
+                 hop_length=100,
+                 fft_window_size=1024,
+                 padding_value=0.0,
+                 frequency_min: float = 0,
+                 frequency_max: float = 14_000,
+                ):
         self.train_config = train_config
         
         self.segmentation = segmentation
@@ -68,6 +84,25 @@ class TokenizedAudioWaveformCollator(PadWaveformsMixin):
         self.tokenizer = tokenizer
 
         self.audio_processor = AutoProcessor.from_pretrained("facebook/hubert-large-ls960-ft")
+        
+        self.feature_size = feature_size
+        nb_frequency_bins = (fft_window_size >> 1) + 1
+        self.nb_frequency_bins = nb_frequency_bins
+        self.hop_length = hop_length
+        self.fft_window_size = fft_window_size
+        self.padding_value = padding_value
+        self.frequency_min = frequency_min
+        self.frequency_max = frequency_max
+
+        self.mel_filters = mel_filter_bank(
+            num_frequency_bins=nb_frequency_bins,
+            num_mel_filters=feature_size,
+            min_frequency=frequency_min,
+            max_frequency=frequency_max,
+            sampling_rate=self.sampling_rate,
+            norm=None,
+            mel_scale="htk",
+        )
 
         return
 
@@ -211,6 +246,8 @@ class TokenizedAudioWaveformCollator(PadWaveformsMixin):
         assert audio_input_values.shape[1] > 0
         assert audio_attention_mask.shape[1] > 0
 
+        max_melspec_items = int(1 + np.floor(self.max_segment_waveform_frames / self.hop_length))
+        batched_segments_melspectrograms = torch.zeros([batch_size, segments_count, self.feature_size, max_melspec_items])
         batched_segments = torch.zeros([batch_size, segments_count, max_segment_waveform_frames])
         segments_waveforms_mask = torch.zeros([batch_size, segments_count, max_segment_waveform_frames])
         for batch_i in range(batch_size):
@@ -222,12 +259,25 @@ class TokenizedAudioWaveformCollator(PadWaveformsMixin):
 
                 assert prev_segment_boarder < segment_boarder
                 segment_length = segment_boarder - prev_segment_boarder
-                batched_segments[batch_i, segment_i, :segment_length] = audio_input_values[batch_i, prev_segment_boarder:segment_boarder]
+                current_waveform = audio_input_values[batch_i, prev_segment_boarder:segment_boarder]
+                batched_segments[batch_i, segment_i, :segment_length] = current_waveform
                 segments_waveforms_mask[batch_i, segment_i, :segment_length] = 1
 
                 prev_segment_boarder = segment_boarder
 
+                log_mel_spectrogram = spectrogram(
+                    current_waveform,
+                    window_function(self.fft_window_size, "hann"),
+                    frame_length=self.fft_window_size,
+                    hop_length=self.hop_length,
+                    power=2.0,
+                    mel_filters=self.mel_filters,
+                    log_mel="dB",
+                )
+                batched_segments_melspectrograms[batch_i, segment_i, :, :log_mel_spectrogram.shape[1]] = torch.from_numpy(log_mel_spectrogram)
+
         result['batched_segments'] = batched_segments
+        result['batched_segments_melspectrograms'] = batched_segments_melspectrograms
         result['segments_waveforms_mask'] = segments_waveforms_mask
         result['segments_count'] = segments_count
 

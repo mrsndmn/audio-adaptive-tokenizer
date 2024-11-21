@@ -8,20 +8,28 @@ from typing import List, Optional
 
 from transformers import logging
 
+from functools import cached_property
+
 class ComputeMetrics():
     def __init__(self, tokenizer):
         
         self.tokenizer = tokenizer
-        self.captioning_metrics = evaluate.combine(
+
+        return
+    
+    @cached_property
+    def compute_validation_metrics(self):
+        return evaluate.combine(
             [
                 evaluate.load("bleu", keep_in_memory=True),
                 evaluate.load("rouge", keep_in_memory=True),
                 evaluate.load("meteor", keep_in_memory=True),
             ]
         )
-        self.wer_compute = evaluate.load("wer")
 
-        return
+    @cached_property
+    def wer_compute(self):
+        return evaluate.load("wer")
 
     def __call__(self, predictions=None, label_ids=None, losses=None, inputs=None, prefix_ids=None, generated_ids=None, **kwargs) -> Dict:
         inputs_ids = inputs

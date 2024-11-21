@@ -19,7 +19,7 @@ from torch.utils.data import DataLoader
 import transformers
 from transformers import AutoTokenizer, LlamaForCausalLM, HubertModel
 
-from aslm.modeling_aslm import AslmModel
+from aslm.modeling_aslm import AslmModel, EfficientNetAudioEncdoerAdapter, EfficientNetAudioEncdoerConfig
 from aslm.configuration_aslm import AslmConfig
 
 from torch.optim.lr_scheduler import CyclicLR
@@ -28,55 +28,28 @@ from speechtokenizer import SpeechTokenizer
 
 from aat.tokenizer import AdaptiveAudioAmplitudeTokenizer
 
-from aat.training.config import TrainConfig, projection_training, finetuning_lm, AudioEncoderType
+from aat.training.config import TrainConfig, projection_training, finetuning_lm
 from aat.training.dataloaders import build_dataloaders
 
 from aat.training.collate import NoSegmentationAudioWaveformCollator, TokenizedAudioWaveformCollator
 
 from dataclasses import dataclass, field
 
-from aat.training.trainer import AATTrainer, AATTrainerSegmentation, TrainingArguments
+from aat.training.trainer import AATTrainer, AATTrainerSegmentation, TrainingArguments, AudioEncoderType
 
 from accelerate.tracking import filter_trackers
 
 from aat.training.compute_metrics import ComputeMetrics
 
-from aslm.configuration_aslm import AslmConfig, AudioEncoderType, SegmentProjectionEnum
+from aslm.configuration_aslm import AslmConfig, SegmentProjectionEnum
 
+from aat.training.config import TrainConfig, SegmentationType
 
 import wandb
 
 
-@dataclass
-class ModelArguments:
-    model_name_or_path: Optional[str] = field(default="facebook/opt-125m")
-    version: Optional[str] = field(default="v0")
-    freeze_backbone: bool = field(default=False)
-    tune_mm_mlp_adapter: bool = field(default=False)
-    vision_tower: Optional[str] = field(default=None)
-    mm_vision_select_layer: Optional[int] = field(default=-1)   # default to the last layer
-    pretrain_mm_mlp_adapter: Optional[str] = field(default=None)
-    mm_projector_type: Optional[str] = field(default='linear')
-    mm_use_im_start_end: bool = field(default=False)
-    mm_use_im_patch_token: bool = field(default=True)
-    mm_patch_merge_type: Optional[str] = field(default='flat')
-    mm_vision_select_feature: Optional[str] = field(default="patch")
-
-
-@dataclass
-class DataArguments:
-    data_path: str = field(default=None,
-                           metadata={"help": "Path to the training data."})
-    lazy_preprocess: bool = False
-    is_multimodal: bool = False
-    image_folder: Optional[str] = field(default=None)
-    image_aspect_ratio: str = 'square'
-
-
 logger = logging.getLogger(__name__)
 logging.basicConfig(level=logging.INFO, format='%(asctime)s %(levelname)s %(message)s')
-
-
 
 def train(
         model: AslmModel,
@@ -85,17 +58,23 @@ def train(
         training_args: TrainingArguments,
         ):
 
-    audio_dataset = datasets.load_dataset("nguyenvulebinh/asr-alignment", 'libris')
-    audio_dataset_val = audio_dataset['valid'].select(range(60))
-    audio_dataset =  audio_dataset['train']
+    # audio_dataset = datasets.load_dataset("nguyenvulebinh/asr-alignment", 'libris')
+    # audio_dataset_val = audio_dataset['valid'].select(range(60))
+    # audio_dataset =  audio_dataset['train']
+    # audio_dataset = audio_dataset.shuffle(seed=42)
+
+    audio_dataset = datasets.load_from_disk(train_config.train_dataset_path)
     audio_dataset = audio_dataset.shuffle(seed=42)
+    audio_dataset_val = datasets.load_from_disk(train_config.validation_dataset_path)
+    audio_dataset_val = audio_dataset_val.select(range(60))
+
     
     early_stopping_callback = transformers.EarlyStoppingCallback(
         early_stopping_patience=20,
         early_stopping_threshold=0.01
     )
     
-    if training_args.segmentation == "none":
+    if training_args.segmentation == SegmentationType.none:
         trainer = AATTrainer(
             model,
             training_args,
@@ -106,8 +85,10 @@ def train(
             compute_metrics=ComputeMetrics(tokenizer),
             # callbacks=[ early_stopping_callback ],
         )
-    elif training_args.segmentation == "uniform":
-        uniform_segmentation_frames_per_segment = 4000
+    elif training_args.segmentation == SegmentationType.uniform:
+        
+        # audio_encoder_embeddings_seq_len
+        uniform_segmentation_frames_per_segment = 3200
         audio_tokenizer = AdaptiveAudioAmplitudeTokenizer(max_segment_duration_milliseconds=(uniform_segmentation_frames_per_segment * 1000 // train_config.sampling_rate))
         
         trainer = AATTrainerSegmentation(
@@ -120,8 +101,21 @@ def train(
             compute_metrics=ComputeMetrics(tokenizer),
             # callbacks=[ early_stopping_callback ],
         )
-    elif training_args.segmentation == "adaptive":
-        raise NotImplementedError()
+    elif training_args.segmentation == SegmentationType.adaptive:
+        audio_tokenizer = AdaptiveAudioAmplitudeTokenizer()
+
+        trainer = AATTrainerSegmentation(
+            model,
+            training_args,
+            processing_class=tokenizer,
+            data_collator=TokenizedAudioWaveformCollator(training_args.segmentation, train_config, audio_tokenizer, tokenizer),
+            train_dataset=audio_dataset,
+            eval_dataset=audio_dataset_val,
+            compute_metrics=ComputeMetrics(tokenizer),
+            # callbacks=[ early_stopping_callback ],
+        )
+
+
     else:
         raise ValueError("invalid segmentation value:", training_args.segmentation)
 
@@ -148,7 +142,7 @@ def unfreeze_model(model):
         p.requires_grad = True
     return
 
-def build_lm_decoder(train_config: TrainConfig, from_pretrained=None, device=None):
+def build_lm_decoder(train_config: TrainConfig, training_args: TrainingArguments, from_pretrained=None, device=None):
 
     print("from_pretrained", from_pretrained)
     kwargs = dict()
@@ -163,22 +157,32 @@ def build_lm_decoder(train_config: TrainConfig, from_pretrained=None, device=Non
     return lm_decoder
 
 
-def build_audio_encoder(train_config: TrainConfig, device=None):
+def build_audio_encoder(train_config: TrainConfig, training_args: TrainingArguments, device=None):
 
-    kwargs = dict()
-    # if device is not None and 'cuda' in str(device):
-    #     kwargs['torch_dtype'] = torch.float16
-    #     kwargs['attn_implementation'] = "flash_attention_2"
+    if training_args.audio_encoder_type == AudioEncoderType.hubert.value:
+        kwargs = dict()
+        if device is not None and 'cuda' in str(device):
+            kwargs['torch_dtype'] = torch.float16
+            kwargs['attn_implementation'] = "flash_attention_2"
 
-    model = HubertModel.from_pretrained("facebook/hubert-large-ls960-ft", mask_time_prob=0.0, **kwargs)
-    # model.eval()
+        # model = HubertModel.from_pretrained("data/models/hubert_finetuned", mask_time_prob=0.0, **kwargs)
+        model = HubertModel.from_pretrained("facebook/hubert-large-ls960-ft", mask_time_prob=0.0, **kwargs)
+        # model.train()
 
-    model = model.to(device)
+        model = model.to(device)
+    elif  training_args.audio_encoder_type == AudioEncoderType.efficient_net.value:
+        from efficientnet_pytorch import EfficientNet
+        eff_net = EfficientNet.from_pretrained('efficientnet-b0')
+        
+        config = EfficientNetAudioEncdoerConfig()
+        model = EfficientNetAudioEncdoerAdapter(config, eff_net)
+    else:
+        raise ValueError(f"unknown audio_encoder_type: {training_args.audio_encoder_type}")
 
     return model
 
 
-def build_model(train_config: TrainConfig, from_pretrained=None, device=None, hubert_embeddings_length_for_longest_audio_segment=7, projection_type=SegmentProjectionEnum.linear):
+def build_model(train_config: TrainConfig, training_args: TrainingArguments, from_pretrained=None, device=None, audio_encoder_embeddings_seq_len=1, projection_type=SegmentProjectionEnum.linear):
 
     # lm_decoder = LlamaForCausalLM.from_pretrained("data/models/hearty-shadow-9/last")
 
@@ -190,16 +194,16 @@ def build_model(train_config: TrainConfig, from_pretrained=None, device=None, hu
         tokenizer.bos_token_id = tokenizer.encode('<|im_start|>')[0]
         tokenizer.eos_token_id = tokenizer.encode('<|im_end|>')[0]
 
-    audio_encoder = build_audio_encoder(train_config, device=device)
+    audio_encoder = build_audio_encoder(train_config, training_args, device=device)
 
     if from_pretrained is not None:
-        lm_decoder = build_lm_decoder(train_config, from_pretrained=train_config.lm_pretrained_model, device=device)
+        lm_decoder = build_lm_decoder(train_config, training_args, from_pretrained=train_config.lm_pretrained_model, device=device)
 
         model = AslmModel.from_pretrained(from_pretrained, audio_encoder, lm_decoder)
     else:
-        lm_decoder = build_lm_decoder(train_config, from_pretrained=train_config.lm_pretrained_model, device=device)
+        lm_decoder = build_lm_decoder(train_config, training_args, from_pretrained=train_config.lm_pretrained_model, device=device)
         config = AslmConfig(
-            hubert_embeddings_length_for_longest_audio_segment=hubert_embeddings_length_for_longest_audio_segment,
+            audio_encoder_embeddings_seq_len=audio_encoder_embeddings_seq_len,
             projection_type=projection_type,
         )
         model = AslmModel(config, audio_encoder, lm_decoder)
@@ -262,15 +266,18 @@ if __name__ == '__main__':
     logger.info("loading language model")
     
     output_dir_base = training_args.output_dir
+    audio_encoder_embeddings_seq_len = training_args.audio_encoder_embeddings_seq_len
     
-    hubert_embeddings_length_for_longest_audio_segment = 12
-    training_args.output_dir = output_dir_base + f"_{hubert_embeddings_length_for_longest_audio_segment}_{args.projection_type}_{training_args.segmentation}"
+    # uniform_segmentation_frames_per_segment
+    
+    training_args.output_dir = output_dir_base + f"_{audio_encoder_embeddings_seq_len}_{args.projection_type}_{training_args.segmentation}"
 
     model, tokenizer = build_model(
         train_config,
+        training_args,
         device=device,
         from_pretrained=None,
-        hubert_embeddings_length_for_longest_audio_segment=hubert_embeddings_length_for_longest_audio_segment,
+        audio_encoder_embeddings_seq_len=audio_encoder_embeddings_seq_len,
         projection_type=args.projection_type,
     )
 

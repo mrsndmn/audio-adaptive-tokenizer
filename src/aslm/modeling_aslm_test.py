@@ -3,7 +3,7 @@ import torch
 from transformers import AutoModelForCausalLM, HubertModel
 from transformers.modeling_outputs import CausalLMOutput
 from .modeling_aslm import AslmModel
-from .configuration_aslm import AslmConfig, AudioEncoderType, SegmentationType, SegmentProjectionEnum
+from .configuration_aslm import AslmConfig, SegmentationType, SegmentProjectionEnum
 
 import tempfile
 
@@ -16,7 +16,7 @@ def _prepare_model():
 
     config = AslmConfig(
         projection_type=SegmentProjectionEnum.linear,
-        hubert_embeddings_length_for_longest_audio_segment=1,
+        audio_encoder_embeddings_seq_len=1,
         segmentation=SegmentationType.none,
         uniform_segmentation_frames_per_segment=None,
         max_segment_waveform_frames=None,

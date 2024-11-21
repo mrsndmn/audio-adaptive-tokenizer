@@ -13,7 +13,7 @@ class DeviceEnum(str, Enum):
     cuda = "cuda"
     cpu  = "cpu"
 
-from aslm.configuration_aslm import AudioEncoderType, SegmentProjectionEnum, SegmentationType
+from aslm.configuration_aslm import SegmentProjectionEnum, SegmentationType
 
 class BaseExperiment(BaseModel):
     model_config = ConfigDict(extra="forbid")
@@ -81,8 +81,6 @@ def overfit_one_batch_train_config():
         optim_audio_encoder = False,
 
         segment_projection = SegmentProjectionEnum.linear,
-        segmentation = SegmentationType.uniform,
-        uniform_segmentation_frames_per_segment = 8000,
 
         # Data
         few_train_samples = 10,
@@ -107,7 +105,7 @@ def projection_training():
         lm_pretrained_model = "Qwen/Qwen1.5-1.8B",
 
         optim_lm = False,
-        lm_flash_attention = True,
+        lm_flash_attention = False,
         unfreeze_lm_at_epoch = None,
         optim_audio_encoder = False,
 

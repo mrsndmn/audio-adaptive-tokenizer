@@ -27,6 +27,11 @@ from torch.utils.data import DataLoader
 
 import time
 
+from enum import Enum
+
+class AudioEncoderType(Enum):
+    hubert = "hubert"
+    efficient_net = "efficient_net"
 
 @dataclass
 class TrainingArguments(transformers.TrainingArguments):
@@ -43,11 +48,11 @@ class TrainingArguments(transformers.TrainingArguments):
     include_for_metrics: List[str] = field(default_factory=lambda: [ 'inputs' ])
     
     num_train_epochs: int = field(default=10)
-    eval_steps: int = field(default=500)
+    eval_steps: int = field(default=1000)
     eval_strategy: str = field(default='steps')
     
     save_total_limit: int = field(default=2)
-    save_steps: int = field(default=500)
+    save_steps: int = field(default=1000)
     load_best_model_at_end: bool =  field(default=True)
 
     logging_steps: int = field(default=10)
@@ -55,8 +60,10 @@ class TrainingArguments(transformers.TrainingArguments):
     learning_rate: float = field(default=1e-4)
     
     segmentation: str = field(default="none")
-
-
+    
+    train_audio_encoder: bool =  field(default=True)
+    audio_encoder_type: AudioEncoderType =  field(default="hubert")
+    audio_encoder_embeddings_seq_len: int = field(default=1)
 
 class AATTrainer(Trainer):
 
@@ -90,6 +97,15 @@ class AATTrainer(Trainer):
 
         return self.optimizer
     
+    def get_audio_embeds_from_inputs(self, inputs):
+        if self.args.train_audio_encoder:
+            audio_embeds, audio_embeds_attention_mask = self._get_audio_embeds_from_inputs(inputs)
+        else:
+            with torch.no_grad():
+                audio_embeds, audio_embeds_attention_mask = self._get_audio_embeds_from_inputs(inputs)
+
+        return audio_embeds, audio_embeds_attention_mask
+    
     def _get_audio_embeds_from_inputs(self, inputs):
         # move to device
         # [ bs, max_segment_waveform_frames ]
@@ -98,6 +114,7 @@ class AATTrainer(Trainer):
 
         # audio_hidden_states ~ [ bs, seq_len, embedding_dim ]
         # embeddings_attention_mask ~ [ bs, seq_len ]
+        
         audio_embeds, audio_embeds_attention_mask = self.model.encode_audio(batched_waveforms, batched_waveforms_attention_mask)
 
         assert not audio_embeds.isnan().any()
@@ -113,9 +130,7 @@ class AATTrainer(Trainer):
         handling potential state.
         """
 
-        # assert self.args.segmentation == SegmentationType.none
-        
-        audio_embeds, audio_embeds_attention_mask = self._get_audio_embeds_from_inputs(inputs)
+        audio_embeds, audio_embeds_attention_mask = self.get_audio_embeds_from_inputs(inputs)
 
         inputs_ids = inputs['input_ids'].to(self.args.device)
         inputs_embeds = self.model.encode_text(inputs_ids)
@@ -205,6 +220,30 @@ class AATTrainer(Trainer):
             self.accelerator.log(step_metrics)
 
         return (loss, outputs) if return_outputs else loss
+
+    def training_step(self, model: AslmModel, *args, **kwargs):
+        result = super().training_step(model, *args, **kwargs)
+        
+        
+        audio_encdoer_grad = None
+        if hasattr(model.audio_encoder, 'feature_projection'):
+            audio_encdoer_grad = model.audio_encoder.feature_projection.projection.weight.grad
+        elif hasattr(model.audio_encoder, 'efficient_net'):
+            audio_encdoer_grad = model.audio_encoder.efficient_net._conv_head.weight.grad
+
+
+        audio_tokens_emb_grad = model.audio_tokens_embeddings.weight.grad
+        
+        extra_log = dict()
+        if audio_encdoer_grad is not None:
+            extra_log["train/hubert_projection_grad_norm"] = audio_encdoer_grad.norm(2)
+
+        if audio_tokens_emb_grad is not None:
+            extra_log["train/audio_tokens_emb_grad"] = audio_tokens_emb_grad.norm(2)
+            
+        self.accelerator.log(extra_log)
+
+        return result
 
     def evaluation_loop(
         self,
@@ -552,16 +591,24 @@ class AATTrainerSegmentation(AATTrainer):
 
         batch_size = segments_boarders_padded.shape[0]
         segments_count = segments_boarders_padded.shape[1]
+        
+        if self.args.audio_encoder_type == AudioEncoderType.hubert.value:
+            # [ bs * segments_count, max_segment_waveform_frames ]
+            batched_segments = inputs['batched_segments'].flatten(0,1)
+            segments_waveforms_mask = inputs['segments_waveforms_mask'].flatten(0, 1)
+        elif self.args.audio_encoder_type == AudioEncoderType.efficient_net.value:
+            # [ bs * segments_count, 1, num_mel_features, seq_len ]
+            batched_segments = inputs['batched_segments_melspectrograms'].flatten(0,1).unsqueeze(1).repeat(1, 3, 1, 1)
+            segments_waveforms_mask = inputs['segments_waveforms_mask'].flatten(0, 1)
+        else:
+            raise ValueError(f"unknown audio encoder type: {self.args.audio_encoder_type}")
 
-        # [ bs * segments_count, max_segment_waveform_frames ]
-        batched_segments = inputs['batched_segments'].flatten(0,1)
-        segments_waveforms_mask = inputs['segments_waveforms_mask'].flatten(0, 1)
+        audio_embeds, audio_embeds_attention_mask = self.model.encode_audio(batched_segments, segments_waveforms_mask)
 
         # audio_hidden_states ~ [ bs * segments_count, seq_len, embedding_dim ]
         # embeddings_attention_mask ~ [ bs * segments_count, seq_len ]
-        audio_embeds, audio_embeds_attention_mask = self.model.encode_audio(batched_segments, segments_waveforms_mask)
         
-        assert audio_embeds.shape[1] == self.model.config.hubert_embeddings_length_for_longest_audio_segment
+        assert audio_embeds.shape[1] == self.model.config.audio_encoder_embeddings_seq_len
 
         assert not audio_embeds.isnan().any()
 
@@ -576,8 +623,8 @@ class AATTrainerSegmentation(AATTrainer):
         handling potential state.
         """
 
-        audio_embeds, audio_embeds_attention_mask = self._get_audio_embeds_from_inputs(inputs)
-
+        audio_embeds, audio_embeds_attention_mask = self.get_audio_embeds_from_inputs(inputs)
+    
         inputs_ids = inputs['input_ids'].to(self.args.device)
         inputs_embeds = self.model.encode_text(inputs_ids)
         attention_mask = inputs['attention_mask'].to(self.args.device)

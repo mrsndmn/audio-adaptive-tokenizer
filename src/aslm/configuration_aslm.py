@@ -26,10 +26,6 @@ from enum import Enum
 logger = logging.get_logger(__name__)
 
 
-class AudioEncoderType(str, Enum):
-    hubert  = "hubert"
-    speechTokenizer = "speechTokenizer"
-
 class SegmentationType(str, Enum):
     none  = "none"
     uniform  = "uniform"
@@ -77,7 +73,7 @@ class AslmConfig(PretrainedConfig):
     def __init__(
         self,
         projection_type: SegmentProjectionEnum = SegmentProjectionEnum.linear,
-        hubert_embeddings_length_for_longest_audio_segment: int = 7,
+        audio_encoder_embeddings_seq_len: int = 1,
         uniform_segmentation_frames_per_segment: Optional[int] = None,
         max_segment_waveform_frames: Optional[int] = None,
         pad_token_id=-1,
@@ -89,7 +85,7 @@ class AslmConfig(PretrainedConfig):
 
         # Model
         self.projection_type = projection_type
-        self.hubert_embeddings_length_for_longest_audio_segment = hubert_embeddings_length_for_longest_audio_segment
+        self.audio_encoder_embeddings_seq_len = audio_encoder_embeddings_seq_len
 
         # Segmentation
         self.uniform_segmentation_frames_per_segment = uniform_segmentation_frames_per_segment

@@ -16,9 +16,12 @@ def test_collate():
 
     sampling_rate = 16000
     collator = TokenizedAudioWaveformCollator(
+        "uniform",
         train_config,
         audio_tokenizer,
-        text_tokenizer, sampling_rate=sampling_rate, max_segment_waveform_frames=4000)
+        text_tokenizer,
+        uniform_segmentation_frames_per_segment=4000,
+    )
 
     collator_items = [
         {
@@ -40,6 +43,7 @@ def test_collate():
     ]
     collator_out = collator(collator_items)
 
-    assert collator_out["audio_input_values"].shape == collator_out["audio_attention_mask"].shape
+    assert collator_out["batched_segments"].shape == collator_out["segments_waveforms_mask"].shape
     assert collator_out["segments_boarders_padded"].shape == collator_out["segments_boarders_attention_mask"].shape
     assert collator_out["segments_max_frame_len"].shape == torch.Size([ len(collator_items) ])
+    assert collator_out["batched_segments_melspectrograms"].shape == torch.Size([ len(collator_items), collator_out["segments_boarders_padded"].shape[1], 64, 9 ])
