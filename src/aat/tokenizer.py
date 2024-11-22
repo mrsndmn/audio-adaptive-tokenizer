@@ -13,7 +13,7 @@ from aat.audio import AudioWaveform
 
 class AdaptiveAudioAmplitudeTokenizer():
     def __init__(self,
-                lowess_frac=0.008,
+                running_mean_points=20,
                 min_segment_duration_milliseconds=25,
                 max_segment_duration_milliseconds=250,
                 n_fft=400,
@@ -22,7 +22,7 @@ class AdaptiveAudioAmplitudeTokenizer():
                 sampling_rate=16000,
             ):
 
-        self.lowess_frac = lowess_frac
+        self.running_mean_points = running_mean_points
 
         self.n_fft = n_fft
         self.hop_length = hop_length
@@ -70,7 +70,7 @@ class AdaptiveAudioAmplitudeTokenizer():
             cumsum = np.cumsum(x)
             return (cumsum[N:] - cumsum[:-N]) / float(N)
 
-        melspec_mean_amplitude = running_mean(melspec_mean_amplitude, 12)
+        melspec_mean_amplitude = running_mean(melspec_mean_amplitude, self.running_mean_points)
 
         # lowess is too slow
         # melspec_mean_amplitude = sm.nonparametric.lowess(melspec_mean_amplitude, np.arange(len(melspec_mean_amplitude)), frac=0.008)

@@ -115,8 +115,8 @@ def projection_training():
         n_words=50,
         not_segmented_dataset = True,
 
-        train_dataset_path = "data/libris_with_segments_shard_1-4.dataset/",
-        validation_dataset_path = "data/libris_with_segments_valid.dataset",
+        train_dataset_path = "data/libris_with_segments_full_processed.dataset/",
+        validation_dataset_path = "data/libris_with_segments_valid.dataset/",
     )
 
 def finetuning_lm():
