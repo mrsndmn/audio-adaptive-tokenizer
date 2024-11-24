@@ -47,10 +47,8 @@ class TrainConfig(BaseExperiment):
     # Data
     few_train_samples: Optional[int] = 100
     few_val_samples: int = 1
-    dataloader_num_workers: int = 5
     n_words: Optional[int] = None
     add_prefix: bool = True
-    # dataloader_num_workers = 0
 
     not_segmented_dataset: bool = False
 
@@ -81,14 +79,13 @@ def overfit_one_batch_train_config():
         segment_projection = SegmentProjectionEnum.linear,
 
         # Data
-        few_train_samples = 10,
-        few_val_samples = 5,
-        dataloader_num_workers = 0,
+        few_train_samples = 100,
+        few_val_samples = 8,
         n_words=50,
         not_segmented_dataset = True,
 
-        train_dataset_path = "data/libris_with_segments_shard_1-4.dataset/",
-        validation_dataset_path = "data/libris_with_segments_valid.dataset",
+        train_dataset_path = "data/libris_with_segments_full_processed.dataset/",
+        validation_dataset_path = "data/libris_with_segments_valid.dataset/",
     )
 
 
@@ -111,7 +108,6 @@ def projection_training():
         # Data
         few_train_samples = None,
         few_val_samples = 100,
-        dataloader_num_workers = 30,
         n_words=50,
         not_segmented_dataset = True,
 
@@ -138,7 +134,6 @@ def finetuning_lm():
         # Data
         few_train_samples = None,
         few_val_samples = 1000,
-        dataloader_num_workers = 30,
         n_words=50,
         not_segmented_dataset = True,
 

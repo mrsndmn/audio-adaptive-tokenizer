@@ -44,6 +44,8 @@ class AudioEmbeddingsEncoderPooling(nn.Module):
 
 from dataclasses import dataclass
 
+from efficientnet_pytorch.utils import Conv2dStaticSamePadding
+
 @dataclass
 class EfficientNetAudioEncdoerConfig:
     hidden_size: int = 1280
@@ -56,13 +58,15 @@ class EfficientNetAudioEncdoerAdapter(nn.Module):
         self.config = config
         self.efficient_net = efficient_net
         self.efficient_net._fc = nn.Identity()
+        self.efficient_net._dropout = nn.Identity()
+        # self.efficient_net._avg_pooling = nn.Identity()
         
     def forward(
         self,
         input_values=None,
         attention_mask=None,
     ):
-        efficient_net_output = self.efficient_net(input_values)
+        efficient_net_output = self.efficient_net(input_values.repeat(1, 3, 1, 1))
         efficient_net_output = efficient_net_output.unsqueeze(1)
         # efficient_net_output reshape?
         return { "last_hidden_state": efficient_net_output }
@@ -88,6 +92,9 @@ class AslmModel(PreTrainedModel):
             self.audio_embeddings_pooling = AudioEmbeddingsEncoderPooling(embedding_dim=audio_encoder_hidden_size, out_dim=lm_decoder.config.hidden_size)
         elif config.projection_type == SegmentProjectionEnum.linear:
             linear_features = audio_encoder_hidden_size * config.audio_encoder_embeddings_seq_len
+            # self.audio_encoder_projection = nn.Sequential(
+            #     nn.Linear(linear_features, lm_decoder.config.hidden_size),
+            # )
 
             self.audio_encoder_projection = nn.Sequential(
                 nn.Linear(linear_features, 4096),

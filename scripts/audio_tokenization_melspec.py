@@ -23,20 +23,22 @@ logging.basicConfig(level=logging.INFO, format='%(asctime)s %(levelname)s %(mess
 
 if __name__ == '__main__':
 
-    expected_sampling_rate = 16000
+    audio_tokenizer = AdaptiveAudioAmplitudeTokenizer()
 
     audio_dataset = load_dataset("nguyenvulebinh/asr-alignment", 'libris')['train']
-    audio_dataset = audio_dataset.cast_column('audio', datasets.Audio(sampling_rate=expected_sampling_rate))
-
-    audio_tokenizer = AdaptiveAudioAmplitudeTokenizer()
+    audio_dataset = audio_dataset.cast_column('audio', datasets.Audio(sampling_rate=audio_tokenizer.sampling_rate))
     
+    base_dir = "data/libris_melspectrograms"
+    already_exists = set(os.listdir(base_dir))
+
     def process_item(item):
+        item_id = item['id']
+        if item_id in already_exists:
+            return
+        
         audio_waveform = item['audio']['array']
-        awf_sr = AudioWaveform(audio_waveform, item['audio']['sampling_rate'])
-        item_audio_segments = audio_tokenizer.tokenize(awf_sr)
-        segment_frames = [ sf.waveform.shape[-1] for sf in item_audio_segments ]
-        return {"segment_frames": segment_frames}
+        audio_waveform_normed = (audio_waveform - audio_waveform.mean()) / (audio_waveform.std() + 1e-6)
+        melspec = audio_tokenizer.get_melspec(audio_waveform_normed)
+        torch.save(melspec, os.path.join(base_dir, item_id))
 
-    audio_dataset_processed = audio_dataset.map(process_item)
-    audio_dataset_processed.save_to_disk(f'data/libris_with_segments_full_processed.dataset')
-
+    audio_dataset.map(process_item)

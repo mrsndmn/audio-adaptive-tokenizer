@@ -48,6 +48,8 @@ class TrainingArguments(transformers.TrainingArguments):
     include_for_metrics: List[str] = field(default_factory=lambda: [ 'inputs' ])
     
     num_train_epochs: int = field(default=10)
+    few_train_samples: Optional[int] = field(default=None)
+    
     eval_steps: int = field(default=1000)
     eval_strategy: str = field(default='steps')
     
@@ -600,7 +602,7 @@ class AATTrainerSegmentation(AATTrainer):
             segments_waveforms_mask = inputs['segments_waveforms_mask'].flatten(0, 1)
         elif self.args.audio_encoder_type == AudioEncoderType.efficient_net.value:
             # [ bs * segments_count, 1, num_mel_features, seq_len ]
-            batched_segments = inputs['batched_segments_melspectrograms'].flatten(0,1).unsqueeze(1).repeat(1, 3, 1, 1)
+            batched_segments = inputs['batched_segments_melspectrograms'].flatten(0,1).unsqueeze(1)
             segments_waveforms_mask = inputs['segments_waveforms_mask'].flatten(0, 1)
         else:
             raise ValueError(f"unknown audio encoder type: {self.args.audio_encoder_type}")

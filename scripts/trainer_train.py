@@ -28,7 +28,7 @@ from speechtokenizer import SpeechTokenizer
 
 from aat.tokenizer import AdaptiveAudioAmplitudeTokenizer
 
-from aat.training.config import TrainConfig, projection_training, finetuning_lm
+from aat.training.config import TrainConfig, projection_training, finetuning_lm, overfit_one_batch_train_config
 from aat.training.dataloaders import build_dataloaders
 
 from aat.training.collate import NoSegmentationAudioWaveformCollator, TokenizedAudioWaveformCollator
@@ -58,16 +58,12 @@ def train(
         training_args: TrainingArguments,
         ):
 
-    if training_args.segmentation == SegmentationType.adaptive.value:
-        audio_dataset = datasets.load_from_disk(train_config.train_dataset_path)
-        audio_dataset = audio_dataset.shuffle(seed=42)
-        audio_dataset_val = datasets.load_from_disk(train_config.validation_dataset_path)
-        audio_dataset_val = audio_dataset_val.select(range(60))
-    else:
-        audio_dataset = datasets.load_dataset("nguyenvulebinh/asr-alignment", 'libris')
-        audio_dataset_val = audio_dataset['valid'].select(range(60))
-        audio_dataset =  audio_dataset['train']
-        audio_dataset = audio_dataset.shuffle(seed=42)
+    audio_dataset = datasets.load_dataset("nguyenvulebinh/asr-alignment", 'libris')
+    audio_dataset_val = audio_dataset['valid'].select(range(60))
+    audio_dataset =  audio_dataset['train'] # .filter(lambda x: (x['audio']['array'].shape[-1] // x['audio']['sampling_rate']) < 18)
+    if training_args.few_train_samples is not None:
+        audio_dataset = audio_dataset.select(range(training_args.few_train_samples))
+    audio_dataset = audio_dataset.shuffle(seed=42)
     
     early_stopping_callback = transformers.EarlyStoppingCallback(
         early_stopping_patience=20,
@@ -256,6 +252,15 @@ if __name__ == '__main__':
         training_args.per_device_train_batch_size = 20
         training_args.gradient_accumulation_steps = 5
         training_args.eval_steps = 300
+    elif args.profile:
+        training_args.num_train_epochs = 1
+        training_args.few_train_samples = 100
+        training_args.per_device_train_batch_size = 10
+        training_args.gradient_accumulation_steps = 1
+        training_args.gradient_accumulation_steps = 1
+        training_args.dataloader_num_workers = 0
+        training_args.eval_steps = 100
+        train_config = overfit_one_batch_train_config()
     else:
         train_config = projection_training()
 
@@ -309,12 +314,7 @@ if __name__ == '__main__':
     if args.profile:
         logger.info("Run training with profiling")
         with cProfile.Profile() as pr:
-
-            if train_config.optim_lm:
-                run_training()
-            else:
-                with autocast(dtype=torch.bfloat16):
-                    run_training()
+            run_training()
 
             profile_file_name = "train_profile.prof"
             logger.info(f"Save profile: {profile_file_name}")

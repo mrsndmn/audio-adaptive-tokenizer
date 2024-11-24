@@ -2,6 +2,7 @@ from typing import Callable, List, Dict
 
 import numpy as np
 import torch
+import os
 
 from transformers import AutoProcessor
 
@@ -59,12 +60,6 @@ class TokenizedAudioWaveformCollator(PadWaveformsMixin):
                  n_words=None,
                  noise_augmentation: bool = False,
                  uniform_segmentation_frames_per_segment=None,
-                 feature_size=80,
-                 hop_length=160,
-                 fft_window_size=400,
-                 padding_value=0.0,
-                 frequency_min: float = 0,
-                 frequency_max: float = 14_000,
                 ):
         self.train_config = train_config
         
@@ -85,25 +80,9 @@ class TokenizedAudioWaveformCollator(PadWaveformsMixin):
 
         self.audio_processor = AutoProcessor.from_pretrained("facebook/hubert-large-ls960-ft")
         
-        self.feature_size = feature_size
-        nb_frequency_bins = (fft_window_size >> 1) + 1
-        self.nb_frequency_bins = nb_frequency_bins
-        self.hop_length = hop_length
-        self.fft_window_size = fft_window_size
-        self.padding_value = padding_value
-        self.frequency_min = frequency_min
-        self.frequency_max = frequency_max
-
-        self.mel_filters = mel_filter_bank(
-            num_frequency_bins=nb_frequency_bins,
-            num_mel_filters=feature_size,
-            min_frequency=frequency_min,
-            max_frequency=frequency_max,
-            sampling_rate=self.sampling_rate,
-            norm=None,
-            mel_scale="htk",
-        )
-
+        self.melspec_base_path = "data/libris_melspectrograms"
+        self.melspec_files = set(os.listdir(self.melspec_base_path))
+        
         return
 
     def __call__(self, items):
@@ -125,8 +104,11 @@ class TokenizedAudioWaveformCollator(PadWaveformsMixin):
         if self.n_words is not None:
             n_words = random.randint(5, self.n_words)
 
+        items_melspecs = []
         for i, item in enumerate(items):
             waveform = np.array(item['audio']['array'])
+            sampling_rate = item['audio']['sampling_rate']
+            assert sampling_rate == self.sampling_rate
 
             if self.noise_augmentation:
                 waveform += np.random.rand(waveform.shape[-1]) * random.randint(1, 50) / 1000
@@ -143,7 +125,21 @@ class TokenizedAudioWaveformCollator(PadWaveformsMixin):
                 frames_boarders_raw = np.array(segments_list)
                 frames_boarders = frames_boarders_raw.cumsum()
             elif self.segmentation == SegmentationType.adaptive:
-                frames_boarders_raw = np.array(item['segment_frames'])
+                waveform_normed = (waveform - waveform.mean()) / (waveform.std() + 1e-6)
+                awf_sr = AudioWaveform(waveform_normed, sampling_rate)
+                
+                melspec = None
+                melspec_file_path = os.path.join(self.melspec_base_path, item['id'])
+                if item['id'] in self.melspec_files:
+                    try:
+                        melspec = torch.load(melspec_file_path, weights_only=False)
+                    except Exception as e:
+                        print(f"Failed to load {melspec_file_path}:", e)
+
+                item_audio_segments, melspec = self.audio_tokenizer.tokenize(awf_sr, melspec=melspec)
+                items_melspecs.append(melspec)
+                segment_frames = [ sf.waveform.shape[-1] for sf in item_audio_segments ]
+                frames_boarders_raw = np.array(segment_frames)
                 frames_boarders = frames_boarders_raw.cumsum()
             else:
                 raise ValueError(f"Unhandled seglent projection type: {self.segmentation}")
@@ -246,12 +242,15 @@ class TokenizedAudioWaveformCollator(PadWaveformsMixin):
         assert audio_input_values.shape[1] > 0
         assert audio_attention_mask.shape[1] > 0
 
-        max_melspec_items = int(1 + np.floor(self.max_segment_waveform_frames / self.hop_length))
-        batched_segments_melspectrograms = torch.zeros([batch_size, segments_count, self.feature_size, max_melspec_items])
+        max_melspec_items = int(1 + np.floor(self.max_segment_waveform_frames / self.audio_tokenizer.hop_length))
+        batched_segments_melspectrograms = torch.zeros([batch_size, segments_count, self.audio_tokenizer.num_mel_filters, max_melspec_items])
         batched_segments = torch.zeros([batch_size, segments_count, max_segment_waveform_frames])
         segments_waveforms_mask = torch.zeros([batch_size, segments_count, max_segment_waveform_frames])
+        assert len(items_melspecs) == batch_size
         for batch_i in range(batch_size):
             prev_segment_boarder = 0
+            full_audio_log_mel_spectrogram = items_melspecs[batch_i]
+            
             for segment_i in range(segments_count):
                 segment_boarder = segments_boarders_padded[batch_i, segment_i]
                 if segment_i > 0 and segment_boarder == 0:
@@ -263,25 +262,19 @@ class TokenizedAudioWaveformCollator(PadWaveformsMixin):
                 batched_segments[batch_i, segment_i, :segment_length] = current_waveform
                 segments_waveforms_mask[batch_i, segment_i, :segment_length] = 1
 
-                prev_segment_boarder = segment_boarder
+                melspec_boarder_start, melspec_boarder_end = ((prev_segment_boarder // self.audio_tokenizer.hop_length), (segment_boarder // self.audio_tokenizer.hop_length))
+                # [ self.audio_tokenizer.num_mel_filters, melspec_seq_len ]
+                segment_log_mel_spectrogram = full_audio_log_mel_spectrogram[:, melspec_boarder_start:melspec_boarder_end]
+                batched_segments_melspectrograms[batch_i, segment_i, :, :segment_log_mel_spectrogram.shape[1]] = torch.from_numpy(segment_log_mel_spectrogram)
 
-                log_mel_spectrogram = spectrogram(
-                    current_waveform,
-                    window_function(self.fft_window_size, "hann"),
-                    frame_length=self.fft_window_size,
-                    hop_length=self.hop_length,
-                    power=2.0,
-                    mel_filters=self.mel_filters,
-                    log_mel="dB",
-                )
-                batched_segments_melspectrograms[batch_i, segment_i, :, :log_mel_spectrogram.shape[1]] = torch.from_numpy(log_mel_spectrogram)
+                prev_segment_boarder = segment_boarder
 
         result['batched_segments'] = batched_segments
         result['batched_segments_melspectrograms'] = batched_segments_melspectrograms
         result['segments_waveforms_mask'] = segments_waveforms_mask
         result['segments_count'] = segments_count
 
-        assert not result['batched_segments'].isnan().any()
+        # assert not result['batched_segments'].isnan().any()
         assert not result['segments_waveforms_mask'].isnan().any()
 
         return result

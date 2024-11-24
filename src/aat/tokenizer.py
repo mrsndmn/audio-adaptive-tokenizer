@@ -13,12 +13,12 @@ from aat.audio import AudioWaveform
 
 class AdaptiveAudioAmplitudeTokenizer():
     def __init__(self,
-                running_mean_points=20,
-                min_segment_duration_milliseconds=25,
-                max_segment_duration_milliseconds=250,
+                running_mean_points=12,
+                min_segment_duration_milliseconds=125,
+                max_segment_duration_milliseconds=1500,
                 n_fft=400,
                 hop_length=160,
-                num_mel_filters=80,
+                num_mel_filters=64,
                 sampling_rate=16000,
             ):
 
@@ -111,7 +111,7 @@ class AdaptiveAudioAmplitudeTokenizer():
 
         return melspec
 
-    def pretokenize(self, audio_waveform: np.ndarray) -> List[int]:
+    def pretokenize(self, audio_waveform: np.ndarray, melspec=None) -> List[int]:
         """Splits waveform to segments based on local minimas of amplidude
 
         Args:
@@ -120,7 +120,8 @@ class AdaptiveAudioAmplitudeTokenizer():
         Returns:
             List[int]: boundary frames indexes
         """
-        melspec = self.get_melspec(audio_waveform)
+        if melspec is None:
+            melspec = self.get_melspec(audio_waveform)
 
         melspec_minimas = self.find_amplitude_minimas(melspec)
         item_waveform_minimas = melspec_minimas * self.hop_length # move to waveform space
@@ -128,7 +129,7 @@ class AdaptiveAudioAmplitudeTokenizer():
         # append the last frame as last segment end
         segments_boarders = item_waveform_minimas.tolist() + [ audio_waveform.shape[-1] ]
 
-        return segments_boarders
+        return segments_boarders, melspec
 
     def process_segments_boarders(self, audio_waveform: np.ndarray, segments_boarders: np.ndarray) -> List[np.ndarray]:
         """Merge too small segments and split too big segments
@@ -174,12 +175,12 @@ class AdaptiveAudioAmplitudeTokenizer():
 
         return waveform_segments
 
-    def tokenize(self, audio_waveform_sr: AudioWaveform) -> List[AudioWaveform]:
+    def tokenize(self, audio_waveform_sr: AudioWaveform, melspec=None) -> List[AudioWaveform]:
 
         audio_waveform_sr.assert_sampling_rate(self.sampling_rate)
         audio_waveform = audio_waveform_sr.waveform
 
-        segments_boarders = self.pretokenize(audio_waveform)
+        segments_boarders, melspec = self.pretokenize(audio_waveform, melspec=melspec)
 
         waveform_segments = self.process_segments_boarders(audio_waveform, segments_boarders)
 
@@ -189,4 +190,4 @@ class AdaptiveAudioAmplitudeTokenizer():
 
         audio_segments_sr: List[AudioWaveform] = [ AudioWaveform(wf, audio_waveform_sr.sampling_rate) for wf in waveform_segments ]
 
-        return audio_segments_sr
+        return audio_segments_sr, melspec
