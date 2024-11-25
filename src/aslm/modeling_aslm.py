@@ -144,16 +144,20 @@ class AslmModel(PreTrainedModel):
         # todo move this cases to projection class logic
         # [ bs * segments_count, max_segment_waveform_frames ]
         ae_waveform = waveform
-        # if self.audio_encoder.dtype != ae_waveform.dtype:
-        #     ae_waveform = ae_waveform.to(self.audio_encoder.dtype)
+        need_cast_to_fp32 = False
+        if hasattr(self.audio_encoder, 'dtype') and self.audio_encoder.dtype != ae_waveform.dtype:
+            need_cast_to_fp32 = True
+            ae_waveform = ae_waveform.to(self.audio_encoder.dtype)
 
+        # breakpoint()
         # audio_hidden_states ~ [ bs * segments_count, seq_len, embedding_dim ]
         audio_embeds = self.audio_encoder(
             input_values=ae_waveform,
             attention_mask=waveforms_mask,
         )['last_hidden_state']
 
-        # audio_embeds = audio_embeds.to(torch.float32)
+        if need_cast_to_fp32:
+            audio_embeds = audio_embeds.to(torch.float32)
 
         batch_size = audio_embeds.shape[0]
         new_seq_len = audio_embeds.shape[1]
@@ -172,7 +176,15 @@ class AslmModel(PreTrainedModel):
 
         audio_embeds_negative_attention_mask = (audio_embeds_attention_mask_hands == 0)
         
-        audio_embeds_attention_mask = self.audio_encoder._get_feature_vector_attention_mask(audio_embeds.shape[1], waveforms_mask, batch_size=batch_size, device=audio_embeds.device)
+        if waveforms_mask is not None:
+            extra_kw_args = dict()
+        else:
+            extra_kw_args = {
+                'batch_size': batch_size,
+                'device': audio_embeds.device,
+            }
+
+        audio_embeds_attention_mask = self.audio_encoder._get_feature_vector_attention_mask(audio_embeds.shape[1], waveforms_mask, **extra_kw_args)
         audio_embeds_attention_mask[audio_embeds_negative_attention_mask] = 0
 
         assert not audio_embeds.isnan().any()

@@ -9,6 +9,7 @@ from transformers import AutoProcessor
 from aat.tokenizer import AdaptiveAudioAmplitudeTokenizer
 from aat.audio import AudioWaveform
 from aat.training.config import TrainConfig, SegmentationType
+from aat.training.trainer import AudioEncoderType
 
 import random
 
@@ -53,7 +54,8 @@ class PadWaveformsMixin():
 class TokenizedAudioWaveformCollator(PadWaveformsMixin):
 
     def __init__(self,
-                 segmentation,
+                 audio_encoder_type: AudioEncoderType,
+                 segmentation: SegmentationType,
                  train_config: TrainConfig,
                  audio_tokenizer: AdaptiveAudioAmplitudeTokenizer,
                  tokenizer,
@@ -63,7 +65,8 @@ class TokenizedAudioWaveformCollator(PadWaveformsMixin):
                 ):
         self.train_config = train_config
         
-        self.segmentation = segmentation
+        self.segmentation: SegmentationType = segmentation
+        self.audio_encoder_type: AudioEncoderType = audio_encoder_type
         self.uniform_segmentation_frames_per_segment = uniform_segmentation_frames_per_segment
 
         assert self.segmentation != SegmentationType.none
@@ -215,6 +218,7 @@ class TokenizedAudioWaveformCollator(PadWaveformsMixin):
             "segments_boarders": segments_boarders,
             "segments_max_frame_len": segments_max_frame_len,
             "items_melspecs": items_melspecs,
+            "audio_segments_waveforms": audio_segments_waveforms,
         }
 
     def _make_padded_segments_boarders(self, segments_boarders, batch_size):
@@ -243,6 +247,7 @@ class TokenizedAudioWaveformCollator(PadWaveformsMixin):
         segments_boarders = initial_process['segments_boarders']
         segments_max_frame_len = initial_process['segments_max_frame_len']
         items_melspecs = initial_process['items_melspecs']
+        audio_segments_waveforms = initial_process['audio_segments_waveforms']
 
         tokenized_caption = tokenizer(tokenizer_input, padding=True)
         result['input_ids'] = torch.tensor(tokenized_caption['input_ids'])
@@ -273,7 +278,7 @@ class TokenizedAudioWaveformCollator(PadWaveformsMixin):
         audio_input_values = None
         audio_attention_mask = None
 
-        if False:
+        if self.audio_encoder_type != AudioEncoderType.efficient_net.value:
             audio_processed_output = self.audio_processor(audio_segments_waveforms, padding=True, return_tensors="pt", sampling_rate=self.train_config.sampling_rate)
 
             audio_input_values = audio_processed_output.input_values
@@ -283,7 +288,9 @@ class TokenizedAudioWaveformCollator(PadWaveformsMixin):
             assert audio_attention_mask.shape[1] > 0
 
         max_melspec_items = int(1 + np.floor(self.max_segment_waveform_frames / self.audio_tokenizer.hop_length))
-        batched_segments_melspectrograms = torch.zeros([batch_size, segments_count, self.audio_tokenizer.num_mel_filters, max_melspec_items])
+        batched_segments_melspectrograms = None
+        if self.audio_encoder_type == AudioEncoderType.efficient_net.value:
+            batched_segments_melspectrograms = torch.zeros([batch_size, segments_count, self.audio_tokenizer.num_mel_filters, max_melspec_items])
         
         batched_segments = None
         segments_waveforms_mask = None
@@ -294,7 +301,9 @@ class TokenizedAudioWaveformCollator(PadWaveformsMixin):
         assert len(items_melspecs) == batch_size
         for batch_i in range(batch_size):
             prev_segment_boarder = 0
-            full_audio_log_mel_spectrogram = items_melspecs[batch_i]
+            
+            if batched_segments_melspectrograms is not None:
+                full_audio_log_mel_spectrogram = items_melspecs[batch_i]
             
             for segment_i in range(segments_count):
                 segment_boarder = segments_boarders_padded[batch_i, segment_i]
@@ -311,8 +320,9 @@ class TokenizedAudioWaveformCollator(PadWaveformsMixin):
 
                 melspec_boarder_start, melspec_boarder_end = ((prev_segment_boarder // self.audio_tokenizer.hop_length), (segment_boarder // self.audio_tokenizer.hop_length))
                 # [ self.audio_tokenizer.num_mel_filters, melspec_seq_len ]
-                segment_log_mel_spectrogram = full_audio_log_mel_spectrogram[:, melspec_boarder_start:melspec_boarder_end]
-                batched_segments_melspectrograms[batch_i, segment_i, :, :segment_log_mel_spectrogram.shape[1]] = torch.from_numpy(segment_log_mel_spectrogram)
+                if batched_segments_melspectrograms is not None:
+                    segment_log_mel_spectrogram = full_audio_log_mel_spectrogram[:, melspec_boarder_start:melspec_boarder_end]
+                    batched_segments_melspectrograms[batch_i, segment_i, :, :segment_log_mel_spectrogram.shape[1]] = torch.from_numpy(segment_log_mel_spectrogram)
 
                 prev_segment_boarder = segment_boarder
 

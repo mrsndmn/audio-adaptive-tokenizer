@@ -66,6 +66,7 @@ class TrainingArguments(transformers.TrainingArguments):
     
     train_audio_encoder: bool =  field(default=True)
     audio_encoder_type: AudioEncoderType =  field(default="hubert")
+    projection_type: str  =  field(default="linear")
     audio_encoder_embeddings_seq_len: int = field(default=1)
     max_segment_frames: Optional[int] = field(default=4000)
     

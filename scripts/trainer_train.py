@@ -97,7 +97,7 @@ def train(
             model,
             training_args,
             processing_class=tokenizer,
-            data_collator=TokenizedAudioWaveformCollator(training_args.segmentation, train_config, audio_tokenizer, tokenizer, uniform_segmentation_frames_per_segment=max_segment_frames),
+            data_collator=TokenizedAudioWaveformCollator(training_args.audio_encoder_type, training_args.segmentation, train_config, audio_tokenizer, tokenizer, uniform_segmentation_frames_per_segment=max_segment_frames),
             train_dataset=audio_dataset,
             eval_dataset=audio_dataset_val,
             compute_metrics=ComputeMetrics(tokenizer),
@@ -116,7 +116,7 @@ def train(
             model,
             training_args,
             processing_class=tokenizer,
-            data_collator=TokenizedAudioWaveformCollator(training_args.segmentation, train_config, audio_tokenizer, tokenizer, n_words=n_words),
+            data_collator=TokenizedAudioWaveformCollator(training_args.audio_encoder_type, training_args.segmentation, train_config, audio_tokenizer, tokenizer, n_words=n_words),
             train_dataset=audio_dataset,
             eval_dataset=audio_dataset_val,
             compute_metrics=ComputeMetrics(tokenizer),
@@ -171,7 +171,7 @@ def build_audio_encoder(train_config: TrainConfig, training_args: TrainingArgume
 
     if training_args.audio_encoder_type == AudioEncoderType.hubert.value:
         kwargs = dict()
-        if device is not None and 'cuda' in str(device):
+        if device is not None and 'cuda' in str(device) and not training_args.train_audio_encoder:
             kwargs['torch_dtype'] = torch.float16
             kwargs['attn_implementation'] = "flash_attention_2"
 
@@ -240,7 +240,6 @@ if __name__ == '__main__':
     parser.add_argument('-t', '--test-run', action='store_true', default=False)
     parser.add_argument('-f', '--finetune', action='store_true', default=False)
     parser.add_argument('-p', '--profile', action='store_true', default=False)
-    parser.add_argument('--projection_type', default='linear')
 
     args, remainig_args = parser.parse_known_args()
 
@@ -288,7 +287,7 @@ if __name__ == '__main__':
     
     # uniform_segmentation_frames_per_segment
     
-    training_args.output_dir = output_dir_base + f"_{audio_encoder_embeddings_seq_len}_{args.projection_type}_{training_args.segmentation}"
+    training_args.output_dir = output_dir_base + f"_{audio_encoder_embeddings_seq_len}_{training_args.projection_type}_{training_args.segmentation}"
 
     model, tokenizer = build_model(
         train_config,
@@ -296,7 +295,7 @@ if __name__ == '__main__':
         device=device,
         from_pretrained=None,
         audio_encoder_embeddings_seq_len=audio_encoder_embeddings_seq_len,
-        projection_type=args.projection_type,
+        projection_type=training_args.projection_type,
     )
 
     logger.info("model was loaded")
