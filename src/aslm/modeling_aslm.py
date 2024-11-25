@@ -71,9 +71,9 @@ class EfficientNetAudioEncdoerAdapter(nn.Module):
         # efficient_net_output reshape?
         return { "last_hidden_state": efficient_net_output }
 
-    def _get_feature_vector_attention_mask(self, feature_seq_len, attention_mask):
+    def _get_feature_vector_attention_mask(self, feature_seq_len, attention_mask=None, batch_size=None, device=None):
 
-        return torch.ones([attention_mask.shape[0], feature_seq_len], dtype=attention_mask.dtype, device=attention_mask.device)
+        return torch.ones([batch_size, feature_seq_len], device=device)
 
 class AslmModel(PreTrainedModel):
 
@@ -132,7 +132,7 @@ class AslmModel(PreTrainedModel):
 
         return
 
-    def encode_audio(self, waveform, waveforms_mask):
+    def encode_audio(self, waveform, waveforms_mask=None, segments_boarders_attention_mask=None):
         """Encodes waveform to hidden dimension
 
         Args:
@@ -157,18 +157,22 @@ class AslmModel(PreTrainedModel):
 
         batch_size = audio_embeds.shape[0]
         new_seq_len = audio_embeds.shape[1]
-        waveform_seq_len = waveforms_mask.shape[1]
-        audio_embeds_attention_mask_hands = waveforms_mask
-        if waveform_seq_len % new_seq_len != 0:
-            # extra_padding_length = new_seq_len - (waveform_seq_len % new_seq_len)
-            # extra_padding = torch.zeros([batch_size, extra_padding_length], dtype=audio_embeds_attention_mask.dtype, device=audio_embeds_attention_mask.device)
-            # audio_embeds_attention_mask = torch.cat([audio_embeds_attention_mask, extra_padding])
-            audio_embeds_attention_mask_hands = audio_embeds_attention_mask_hands[:, :-(waveform_seq_len % new_seq_len)]
+        
+        audio_embeds_attention_mask_hands = segments_boarders_attention_mask
+        if audio_embeds_attention_mask_hands is None:
+            audio_embeds_attention_mask_hands = waveforms_mask
+            waveform_seq_len = waveforms_mask.shape[1]
+            if waveform_seq_len % new_seq_len != 0:
+                # extra_padding_length = new_seq_len - (waveform_seq_len % new_seq_len)
+                # extra_padding = torch.zeros([batch_size, extra_padding_length], dtype=audio_embeds_attention_mask.dtype, device=audio_embeds_attention_mask.device)
+                # audio_embeds_attention_mask = torch.cat([audio_embeds_attention_mask, extra_padding])
+                audio_embeds_attention_mask_hands = audio_embeds_attention_mask_hands[:, :-(waveform_seq_len % new_seq_len)]
 
-        audio_embeds_attention_mask_hands = audio_embeds_attention_mask_hands.reshape(batch_size, new_seq_len, -1).any(dim=-1).long()
+            audio_embeds_attention_mask_hands = audio_embeds_attention_mask_hands.reshape(batch_size, new_seq_len, -1).any(dim=-1).long()
+
         audio_embeds_negative_attention_mask = (audio_embeds_attention_mask_hands == 0)
         
-        audio_embeds_attention_mask = self.audio_encoder._get_feature_vector_attention_mask(audio_embeds.shape[1], waveforms_mask)
+        audio_embeds_attention_mask = self.audio_encoder._get_feature_vector_attention_mask(audio_embeds.shape[1], waveforms_mask, batch_size=batch_size, device=audio_embeds.device)
         audio_embeds_attention_mask[audio_embeds_negative_attention_mask] = 0
 
         assert not audio_embeds.isnan().any()

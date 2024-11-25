@@ -604,14 +604,16 @@ class AATTrainerSegmentation(AATTrainer):
             # [ bs * segments_count, max_segment_waveform_frames ]
             batched_segments = inputs['batched_segments'].flatten(0,1)
             segments_waveforms_mask = inputs['segments_waveforms_mask'].flatten(0, 1)
+            segments_boarders_attention_mask = inputs['segments_boarders_attention_mask'].flatten(0, 1)
         elif self.args.audio_encoder_type == AudioEncoderType.efficient_net.value:
             # [ bs * segments_count, 1, num_mel_features, seq_len ]
             batched_segments = inputs['batched_segments_melspectrograms'].flatten(0,1).unsqueeze(1)
-            segments_waveforms_mask = inputs['segments_waveforms_mask'].flatten(0, 1)
+            segments_waveforms_mask = None
+            segments_boarders_attention_mask = inputs['segments_boarders_attention_mask'].flatten(0, 1)
         else:
             raise ValueError(f"unknown audio encoder type: {self.args.audio_encoder_type}")
 
-        audio_embeds, audio_embeds_attention_mask = self.model.encode_audio(batched_segments, segments_waveforms_mask)
+        audio_embeds, audio_embeds_attention_mask = self.model.encode_audio(batched_segments, segments_waveforms_mask, segments_boarders_attention_mask=segments_boarders_attention_mask)
 
         # audio_hidden_states ~ [ bs * segments_count, seq_len, embedding_dim ]
         # embeddings_attention_mask ~ [ bs * segments_count, seq_len ]

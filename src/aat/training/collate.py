@@ -85,6 +85,17 @@ class TokenizedAudioWaveformCollator(PadWaveformsMixin):
         
         return
     
+    def _get_waveform(self, item):
+        waveform = np.array(item['audio']['array'])
+        sampling_rate = item['audio']['sampling_rate']
+        assert sampling_rate == self.sampling_rate
+
+        if self.noise_augmentation:
+            waveform += np.random.rand(waveform.shape[-1]) * random.randint(1, 50) / 1000
+            
+        return waveform
+
+    
     def _initial_process_segments(self, items):
         tokenizer = self.tokenizer
 
@@ -106,13 +117,7 @@ class TokenizedAudioWaveformCollator(PadWaveformsMixin):
         
         items_melspecs = []
         for i, item in enumerate(items):
-            waveform = np.array(item['audio']['array'])
-            sampling_rate = item['audio']['sampling_rate']
-            assert sampling_rate == self.sampling_rate
-
-            if self.noise_augmentation:
-                waveform += np.random.rand(waveform.shape[-1]) * random.randint(1, 50) / 1000
-
+            waveform = self._get_waveform(item)
             waveform_num_frames = waveform.shape[-1]
 
             if self.segmentation == SegmentationType.uniform:
@@ -126,8 +131,8 @@ class TokenizedAudioWaveformCollator(PadWaveformsMixin):
                 frames_boarders = frames_boarders_raw.cumsum()
             elif self.segmentation == SegmentationType.adaptive:
                 waveform_normed = (waveform - waveform.mean()) / (waveform.std() + 1e-6)
-                awf_sr = AudioWaveform(waveform_normed, sampling_rate)
-                
+                awf_sr = AudioWaveform(waveform_normed, self.sampling_rate)
+
                 melspec = None
                 melspec_file_path = os.path.join(self.melspec_base_path, item['id'])
                 if item['id'] in self.melspec_files:
@@ -151,9 +156,10 @@ class TokenizedAudioWaveformCollator(PadWaveformsMixin):
             word_start_idx = 0
             word_end_idx = len(words) - 1
             waveform_start_frame = 0
-            waveform_end_frame = waveform.shape[-1]
 
             if n_words is not None and len(words) > n_words:
+                waveform_end_frame = waveform.shape[-1]
+
                 word_start_idx = random.randint(0, len(words)-n_words)
                 word_end_idx = word_start_idx + n_words
                 words = words[word_start_idx:word_end_idx]

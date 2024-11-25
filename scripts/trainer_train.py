@@ -61,6 +61,7 @@ def train(
     audio_dataset = datasets.load_dataset("nguyenvulebinh/asr-alignment", 'libris')
     audio_dataset_val = audio_dataset['valid'].select(range(60))
     audio_dataset =  audio_dataset['train'] # .filter(lambda x: (x['audio']['array'].shape[-1] // x['audio']['sampling_rate']) < 18)
+    # audio_dataset = audio_dataset.remove_columns(['audio'])
     if training_args.few_train_samples is not None:
         audio_dataset = audio_dataset.select(range(training_args.few_train_samples))
     audio_dataset = audio_dataset.shuffle(seed=42)
@@ -260,13 +261,12 @@ if __name__ == '__main__':
         training_args.gradient_accumulation_steps = 5
         training_args.eval_steps = 300
     elif args.profile:
-        training_args.num_train_epochs = 1
+        training_args.num_train_epochs = 10
         training_args.few_train_samples = 100
         training_args.per_device_train_batch_size = 10
         training_args.gradient_accumulation_steps = 1
-        training_args.gradient_accumulation_steps = 1
         training_args.dataloader_num_workers = 0
-        training_args.eval_steps = 100
+        training_args.eval_strategy = 'no'
         train_config = overfit_one_batch_train_config()
     else:
         train_config = projection_training()
