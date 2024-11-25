@@ -10,12 +10,12 @@ from transformers import PreTrainedModel
 from transformers.modeling_outputs import BaseModelOutputWithPast
 
 class AudioEmbeddingsEncoderPooling(nn.Module):
-    def __init__(self, embedding_dim=2048, hidden_dim=4096, nhead=16, out_dim=2048, num_layers=4):
+    def __init__(self, embedding_dim=2048, hidden_dim=4096, nhead=16, num_layers=2):
         super().__init__()
 
         self.l_in = nn.Linear(embedding_dim, hidden_dim)
         
-        self.layer_norm_in = nn.LayerNorm(hidden_dim)
+        self.layer_norm = nn.LayerNorm(hidden_dim)
         self.num_layers = num_layers
 
         self.transformer_encoder_layers = nn.ModuleList([
@@ -27,24 +27,18 @@ class AudioEmbeddingsEncoderPooling(nn.Module):
             )
         ] * num_layers)
 
-        self.l_out = nn.Linear(hidden_dim, out_dim)
-
     def forward(self, inputs_embeds, encoder_attention_mask):
-        projected_inputs = self.l_in(inputs_embeds)
-        
-        hidden_states = self.layer_norm_in(projected_inputs)
-        
-        input_hidden_states = hidden_states
-        
+        hidden_states = self.l_in(inputs_embeds)
+
         for transformer_encoder_layer in self.transformer_encoder_layers:
             hidden_states = transformer_encoder_layer(
                 src=hidden_states,
                 src_key_padding_mask=encoder_attention_mask.bool(),
             )
-            hidden_states += input_hidden_states
 
         # [bs * segments_count, 1, hidden_dim]
-        pooler_output = self.l_out(hidden_states[:, 0:1, :])
+        pooler_output = hidden_states[:, 0:1, :]
+        # pooler_output = self.layer_norm(hidden_states[:, 0:1, :])
 
         return pooler_output
 
@@ -95,7 +89,7 @@ class AslmModel(PreTrainedModel):
 
         if config.projection_type == SegmentProjectionEnum.transformer_encoder:
             self.audio_embeddings_pooling_cls_token = nn.Embedding(1, audio_encoder_hidden_size)
-            self.audio_embeddings_pooling = AudioEmbeddingsEncoderPooling(embedding_dim=audio_encoder_hidden_size, out_dim=lm_decoder.config.hidden_size)
+            self.audio_embeddings_pooling = AudioEmbeddingsEncoderPooling(embedding_dim=audio_encoder_hidden_size, hidden_dim=lm_decoder.config.hidden_size)
         elif config.projection_type == SegmentProjectionEnum.linear:
             linear_features = audio_encoder_hidden_size * config.audio_encoder_embeddings_seq_len
             # self.audio_encoder_projection = nn.Sequential(
@@ -126,7 +120,7 @@ class AslmModel(PreTrainedModel):
 
         if hasattr(self, 'audio_embeddings_pooling'):
             nn.init.normal_(self.audio_embeddings_pooling.l_in.weight, mean=0, std=std)
-            nn.init.normal_(self.audio_embeddings_pooling.l_out.weight, mean=0, std=std)
+            # nn.init.normal_(self.audio_embeddings_pooling.l_out.weight, mean=0, std=std)
 
         if hasattr(self, 'audio_encoder_projection'):
             if isinstance(self.audio_encoder_projection, nn.Linear):

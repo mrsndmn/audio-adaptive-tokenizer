@@ -60,7 +60,7 @@ class TrainingArguments(transformers.TrainingArguments):
     save_safetensors: bool =  field(default=False)
 
     # Do not decrease it. Better optimize training
-    logging_steps: int = field(default=50)
+    logging_steps: int = field(default=25)
     
     learning_rate: float = field(default=1e-4)
     
