@@ -84,9 +84,13 @@ def train(
     elif training_args.segmentation == SegmentationType.uniform:
         
         # audio_encoder_embeddings_seq_len
+        n_words = training_args.n_words
         max_segment_frames = training_args.max_segment_frames
         max_segment_duration_milliseconds=(max_segment_frames * 1000 // train_config.sampling_rate)
-        audio_tokenizer = AdaptiveAudioAmplitudeTokenizer(max_segment_duration_milliseconds=(max_segment_frames * 1000 // train_config.sampling_rate))
+        audio_tokenizer = AdaptiveAudioAmplitudeTokenizer(
+            max_segment_duration_milliseconds=(max_segment_frames * 1000 // train_config.sampling_rate),
+            n_words=n_words
+        )
         
         trainer = AATTrainerSegmentation(
             model,
@@ -101,14 +105,17 @@ def train(
     elif training_args.segmentation == SegmentationType.adaptive:
         
         max_segment_frames = training_args.max_segment_frames
+        n_words = training_args.n_words
         max_segment_duration_milliseconds=(max_segment_frames * 1000 // train_config.sampling_rate)
-        audio_tokenizer = AdaptiveAudioAmplitudeTokenizer(max_segment_duration_milliseconds=max_segment_duration_milliseconds)
+        audio_tokenizer = AdaptiveAudioAmplitudeTokenizer(
+            max_segment_duration_milliseconds=max_segment_duration_milliseconds
+        )
 
         trainer = AATTrainerSegmentation(
             model,
             training_args,
             processing_class=tokenizer,
-            data_collator=TokenizedAudioWaveformCollator(training_args.segmentation, train_config, audio_tokenizer, tokenizer),
+            data_collator=TokenizedAudioWaveformCollator(training_args.segmentation, train_config, audio_tokenizer, tokenizer, n_words=n_words),
             train_dataset=audio_dataset,
             eval_dataset=audio_dataset_val,
             compute_metrics=ComputeMetrics(tokenizer),

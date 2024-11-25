@@ -84,13 +84,10 @@ class TokenizedAudioWaveformCollator(PadWaveformsMixin):
         self.melspec_files = set(os.listdir(self.melspec_base_path))
         
         return
-
-    def __call__(self, items):
-
+    
+    def _initial_process_segments(self, items):
         tokenizer = self.tokenizer
 
-        result = dict()
-        # random select caption
         bos_token = tokenizer.decode(tokenizer.bos_token_id)
         eos_token = tokenizer.decode(tokenizer.eos_token_id)
         tokenizer_input = []
@@ -100,10 +97,13 @@ class TokenizedAudioWaveformCollator(PadWaveformsMixin):
         audio_segments_waveforms = []
         segments_max_frame_len = []
 
+        items_melspecs = []
+
+        
         n_words = None
         if self.n_words is not None:
             n_words = random.randint(5, self.n_words)
-
+        
         items_melspecs = []
         for i, item in enumerate(items):
             waveform = np.array(item['audio']['array'])
@@ -203,6 +203,40 @@ class TokenizedAudioWaveformCollator(PadWaveformsMixin):
             segments_boarders.append( frames_boarders )
             segments_max_frame_len.append(frames_boarders_raw.max())
 
+        return {
+            "tokenizer_input": tokenizer_input,
+            "tokenizer_input_prefixes_for_validation": tokenizer_input_prefixes_for_validation,
+            "segments_boarders": segments_boarders,
+            "segments_max_frame_len": segments_max_frame_len,
+            "items_melspecs": items_melspecs,
+        }
+
+    def _make_padded_segments_boarders(self, segments_boarders, batch_size):
+        max_len_segments_boarders = max(len(x) for x in segments_boarders)
+
+        segments_boarders_padded = torch.zeros([batch_size, max_len_segments_boarders ], dtype=torch.long)
+        segments_boarders_attention_mask = torch.zeros_like(segments_boarders_padded)
+
+        # todo vectorize
+        for i, sb in enumerate(segments_boarders):
+            segments_boarders_padded[i, :len(sb)] = torch.tensor(sb, dtype=torch.long)
+            segments_boarders_attention_mask[i, :len(sb)] = 1
+
+        return segments_boarders_padded, segments_boarders_attention_mask
+
+    def __call__(self, items):
+
+        tokenizer = self.tokenizer
+
+        result = dict()
+        # random select caption
+
+        initial_process = self._initial_process_segments(items)
+        tokenizer_input = initial_process['tokenizer_input']
+        tokenizer_input_prefixes_for_validation = initial_process['tokenizer_input_prefixes_for_validation']
+        segments_boarders = initial_process['segments_boarders']
+        segments_max_frame_len = initial_process['segments_max_frame_len']
+        items_melspecs = initial_process['items_melspecs']
 
         tokenized_caption = tokenizer(tokenizer_input, padding=True)
         result['input_ids'] = torch.tensor(tokenized_caption['input_ids'])
@@ -214,15 +248,11 @@ class TokenizedAudioWaveformCollator(PadWaveformsMixin):
         result['prefix_input_ids'] = torch.tensor(tokenized_caption_prefix['input_ids'])
         result['prefix_attention_mask'] = torch.tensor(tokenized_caption_prefix['attention_mask'])
 
-
-        max_len_segments_boarders = max(len(x) for x in segments_boarders)
-        segments_boarders_padded = torch.zeros([ result['attention_mask'].shape[0], max_len_segments_boarders ], dtype=torch.long)
-        segments_boarders_attention_mask = torch.zeros_like(segments_boarders_padded)
-
-        # todo vectorize
-        for i, sb in enumerate(segments_boarders):
-            segments_boarders_padded[i, :len(sb)] = torch.tensor(sb, dtype=torch.long)
-            segments_boarders_attention_mask[i, :len(sb)] = 1
+        batch_size = result['attention_mask'].shape[0]
+        segments_boarders_padded, segments_boarders_attention_mask = self._make_padded_segments_boarders(
+            segments_boarders,
+            batch_size=batch_size,
+        )
 
         result['segments_boarders_padded'] = segments_boarders_padded
         result['segments_boarders_attention_mask'] = segments_boarders_attention_mask
@@ -233,19 +263,28 @@ class TokenizedAudioWaveformCollator(PadWaveformsMixin):
         segments_count = segments_boarders_padded.shape[1]
 
         max_segment_waveform_frames = self.max_segment_waveform_frames
-
-        audio_processed_output = self.audio_processor(audio_segments_waveforms, padding=True, return_tensors="pt", sampling_rate=self.train_config.sampling_rate)
-
-        audio_input_values = audio_processed_output.input_values
-        audio_attention_mask = audio_processed_output.attention_mask
         
-        assert audio_input_values.shape[1] > 0
-        assert audio_attention_mask.shape[1] > 0
+        audio_input_values = None
+        audio_attention_mask = None
+
+        if False:
+            audio_processed_output = self.audio_processor(audio_segments_waveforms, padding=True, return_tensors="pt", sampling_rate=self.train_config.sampling_rate)
+
+            audio_input_values = audio_processed_output.input_values
+            audio_attention_mask = audio_processed_output.attention_mask
+            
+            assert audio_input_values.shape[1] > 0
+            assert audio_attention_mask.shape[1] > 0
 
         max_melspec_items = int(1 + np.floor(self.max_segment_waveform_frames / self.audio_tokenizer.hop_length))
         batched_segments_melspectrograms = torch.zeros([batch_size, segments_count, self.audio_tokenizer.num_mel_filters, max_melspec_items])
-        batched_segments = torch.zeros([batch_size, segments_count, max_segment_waveform_frames])
-        segments_waveforms_mask = torch.zeros([batch_size, segments_count, max_segment_waveform_frames])
+        
+        batched_segments = None
+        segments_waveforms_mask = None
+        if audio_input_values is not None:
+            batched_segments = torch.zeros([batch_size, segments_count, max_segment_waveform_frames])
+            segments_waveforms_mask = torch.zeros([batch_size, segments_count, max_segment_waveform_frames])
+
         assert len(items_melspecs) == batch_size
         for batch_i in range(batch_size):
             prev_segment_boarder = 0
@@ -258,9 +297,11 @@ class TokenizedAudioWaveformCollator(PadWaveformsMixin):
 
                 assert prev_segment_boarder < segment_boarder
                 segment_length = segment_boarder - prev_segment_boarder
-                current_waveform = audio_input_values[batch_i, prev_segment_boarder:segment_boarder]
-                batched_segments[batch_i, segment_i, :segment_length] = current_waveform
-                segments_waveforms_mask[batch_i, segment_i, :segment_length] = 1
+
+                if audio_input_values is not None:
+                    current_waveform = audio_input_values[batch_i, prev_segment_boarder:segment_boarder]
+                    batched_segments[batch_i, segment_i, :segment_length] = current_waveform
+                    segments_waveforms_mask[batch_i, segment_i, :segment_length] = 1
 
                 melspec_boarder_start, melspec_boarder_end = ((prev_segment_boarder // self.audio_tokenizer.hop_length), (segment_boarder // self.audio_tokenizer.hop_length))
                 # [ self.audio_tokenizer.num_mel_filters, melspec_seq_len ]
@@ -269,13 +310,15 @@ class TokenizedAudioWaveformCollator(PadWaveformsMixin):
 
                 prev_segment_boarder = segment_boarder
 
-        result['batched_segments'] = batched_segments
         result['batched_segments_melspectrograms'] = batched_segments_melspectrograms
+
+        result['batched_segments'] = batched_segments
         result['segments_waveforms_mask'] = segments_waveforms_mask
         result['segments_count'] = segments_count
 
-        # assert not result['batched_segments'].isnan().any()
-        assert not result['segments_waveforms_mask'].isnan().any()
+        if audio_input_values is not None:
+            assert not result['batched_segments'].isnan().any()
+            assert not result['segments_waveforms_mask'].isnan().any()
 
         return result
 

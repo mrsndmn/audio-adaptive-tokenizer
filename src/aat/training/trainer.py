@@ -57,7 +57,8 @@ class TrainingArguments(transformers.TrainingArguments):
     save_steps: int = field(default=1000)
     load_best_model_at_end: bool =  field(default=True)
 
-    logging_steps: int = field(default=10)
+    # Do not decrease it. Better optimize training
+    logging_steps: int = field(default=50)
     
     learning_rate: float = field(default=1e-4)
     
@@ -67,6 +68,9 @@ class TrainingArguments(transformers.TrainingArguments):
     audio_encoder_type: AudioEncoderType =  field(default="hubert")
     audio_encoder_embeddings_seq_len: int = field(default=1)
     max_segment_frames: Optional[int] = field(default=4000)
+    
+    # Сколько максимум будет слов в батче?
+    n_words: Optional[int] = field(default=None)
 
 class AATTrainer(Trainer):
 
