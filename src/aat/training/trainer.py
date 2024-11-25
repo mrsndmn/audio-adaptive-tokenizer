@@ -31,6 +31,7 @@ from enum import Enum
 
 class AudioEncoderType(Enum):
     hubert = "hubert"
+    wav2vec2 = "wav2vec2"
     efficient_net = "efficient_net"
 
 @dataclass
@@ -56,6 +57,7 @@ class TrainingArguments(transformers.TrainingArguments):
     save_total_limit: int = field(default=2)
     save_steps: int = field(default=1000)
     load_best_model_at_end: bool =  field(default=True)
+    save_safetensors: bool =  field(default=False)
 
     # Do not decrease it. Better optimize training
     logging_steps: int = field(default=50)
@@ -65,7 +67,8 @@ class TrainingArguments(transformers.TrainingArguments):
     segmentation: str = field(default="none")
     
     train_audio_encoder: bool =  field(default=True)
-    audio_encoder_type: AudioEncoderType =  field(default="hubert")
+    audio_encoder_type: AudioEncoderType =  field(default="hubert") # 
+    audio_encoder_checkpoint: str =  field(default="facebook/hubert-large-ls960-ft") # facebook/wav2vec2-large-lv60
     projection_type: str  =  field(default="linear")
     audio_encoder_embeddings_seq_len: int = field(default=1)
     max_segment_frames: Optional[int] = field(default=4000)
@@ -601,7 +604,7 @@ class AATTrainerSegmentation(AATTrainer):
         batch_size = segments_boarders_padded.shape[0]
         segments_count = segments_boarders_padded.shape[1]
         
-        if self.args.audio_encoder_type == AudioEncoderType.hubert.value:
+        if self.args.audio_encoder_type in (AudioEncoderType.hubert.value, AudioEncoderType.wav2vec2.value):
             # [ bs * segments_count, max_segment_waveform_frames ]
             batched_segments = inputs['batched_segments'].flatten(0,1)
             segments_waveforms_mask = inputs['segments_waveforms_mask'].flatten(0, 1)

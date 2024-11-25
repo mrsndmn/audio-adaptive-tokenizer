@@ -10,35 +10,41 @@ from transformers import PreTrainedModel
 from transformers.modeling_outputs import BaseModelOutputWithPast
 
 class AudioEmbeddingsEncoderPooling(nn.Module):
-    def __init__(self, embedding_dim=2048, hidden_dim=4096, nhead=16, out_dim=2048):
+    def __init__(self, embedding_dim=2048, hidden_dim=4096, nhead=16, out_dim=2048, num_layers=4):
         super().__init__()
 
         self.l_in = nn.Linear(embedding_dim, hidden_dim)
         
         self.layer_norm_in = nn.LayerNorm(hidden_dim)
+        self.num_layers = num_layers
 
-        self.transformer_encoder = nn.TransformerEncoderLayer(
-            d_model=hidden_dim,
-            nhead=nhead,
-            batch_first=True,
-            norm_first=True
-        )
+        self.transformer_encoder_layers = nn.ModuleList([
+            nn.TransformerEncoderLayer(
+                d_model=hidden_dim,
+                nhead=nhead,
+                batch_first=True,
+                norm_first=True
+            )
+        ] * num_layers)
 
         self.l_out = nn.Linear(hidden_dim, out_dim)
 
     def forward(self, inputs_embeds, encoder_attention_mask):
         projected_inputs = self.l_in(inputs_embeds)
         
-        projected_inputs = self.layer_norm_in(projected_inputs)
+        hidden_states = self.layer_norm_in(projected_inputs)
         
-        transformer_encoder_outputs = self.transformer_encoder(
-            src=projected_inputs,
-            src_key_padding_mask=encoder_attention_mask.bool(),
-        )
+        input_hidden_states = hidden_states
+        
+        for transformer_encoder_layer in self.transformer_encoder_layers:
+            hidden_states = transformer_encoder_layer(
+                src=hidden_states,
+                src_key_padding_mask=encoder_attention_mask.bool(),
+            )
+            hidden_states += input_hidden_states
 
         # [bs * segments_count, 1, hidden_dim]
-        pooler_output = self.l_out(transformer_encoder_outputs[:, 0:1, :])
-        pooler_output = F.normalize(pooler_output, dim=-1)
+        pooler_output = self.l_out(hidden_states[:, 0:1, :])
 
         return pooler_output
 

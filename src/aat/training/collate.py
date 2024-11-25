@@ -58,6 +58,7 @@ class TokenizedAudioWaveformCollator(PadWaveformsMixin):
                  segmentation: SegmentationType,
                  train_config: TrainConfig,
                  audio_tokenizer: AdaptiveAudioAmplitudeTokenizer,
+                 audio_processor,
                  tokenizer,
                  n_words=None,
                  noise_augmentation: bool = False,

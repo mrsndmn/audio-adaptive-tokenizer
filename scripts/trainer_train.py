@@ -17,7 +17,7 @@ import datasets
 
 from torch.utils.data import DataLoader
 import transformers
-from transformers import AutoTokenizer, LlamaForCausalLM, HubertModel
+from transformers import AutoTokenizer, LlamaForCausalLM, HubertModel, Wav2Vec2Model
 
 from aslm.modeling_aslm import AslmModel, EfficientNetAudioEncdoerAdapter, EfficientNetAudioEncdoerConfig
 from aslm.configuration_aslm import AslmConfig
@@ -97,7 +97,15 @@ def train(
             model,
             training_args,
             processing_class=tokenizer,
-            data_collator=TokenizedAudioWaveformCollator(training_args.audio_encoder_type, training_args.segmentation, train_config, audio_tokenizer, tokenizer, uniform_segmentation_frames_per_segment=max_segment_frames),
+            data_collator=TokenizedAudioWaveformCollator(
+                training_args.audio_encoder_type,
+                training_args.segmentation,
+                train_config,
+                audio_tokenizer,
+                training_args.audio_encoder_checkpoint,
+                tokenizer,
+                uniform_segmentation_frames_per_segment=max_segment_frames
+            ),
             train_dataset=audio_dataset,
             eval_dataset=audio_dataset_val,
             compute_metrics=ComputeMetrics(tokenizer),
@@ -116,7 +124,15 @@ def train(
             model,
             training_args,
             processing_class=tokenizer,
-            data_collator=TokenizedAudioWaveformCollator(training_args.audio_encoder_type, training_args.segmentation, train_config, audio_tokenizer, tokenizer, n_words=n_words),
+            data_collator=TokenizedAudioWaveformCollator(
+                training_args.audio_encoder_type,
+                training_args.segmentation,
+                train_config,
+                audio_tokenizer,
+                training_args.audio_encoder_checkpoint,
+                tokenizer,
+                n_words=n_words
+            ),
             train_dataset=audio_dataset,
             eval_dataset=audio_dataset_val,
             compute_metrics=ComputeMetrics(tokenizer),
@@ -176,9 +192,17 @@ def build_audio_encoder(train_config: TrainConfig, training_args: TrainingArgume
             kwargs['attn_implementation'] = "flash_attention_2"
 
         # model = HubertModel.from_pretrained("data/models/hubert_finetuned", mask_time_prob=0.0, **kwargs)
-        model = HubertModel.from_pretrained("facebook/hubert-large-ls960-ft", mask_time_prob=0.0, **kwargs)
+        model = HubertModel.from_pretrained(training_args.audio_encoder_checkpoint, mask_time_prob=0.0, **kwargs)
         # model.train()
 
+        model = model.to(device)
+    elif training_args.audio_encoder_type == AudioEncoderType.wav2vec2.value:
+        kwargs = dict()
+        if device is not None and 'cuda' in str(device) and not training_args.train_audio_encoder:
+            kwargs['torch_dtype'] = torch.float16
+            kwargs['attn_implementation'] = "flash_attention_2"
+
+        model = Wav2Vec2Model.from_pretrained(training_args.audio_encoder_checkpoint, mask_time_prob=0.0, **kwargs)
         model = model.to(device)
     elif  training_args.audio_encoder_type == AudioEncoderType.efficient_net.value:
         from efficientnet_pytorch import EfficientNet
