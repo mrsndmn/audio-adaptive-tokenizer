@@ -14,6 +14,7 @@ class AudioEmbeddingsEncoderPooling(nn.Module):
         super().__init__()
 
         self.l_in = nn.Linear(embedding_dim, hidden_dim)
+        # self.l_out = nn.Linear(embedding_dim, hidden_dim)
         
         self.layer_norm = nn.LayerNorm(hidden_dim)
         self.num_layers = num_layers
@@ -28,6 +29,7 @@ class AudioEmbeddingsEncoderPooling(nn.Module):
         ] * num_layers)
 
     def forward(self, inputs_embeds, encoder_attention_mask):
+        # hidden_states = self.layer_norm(hidden_states)
         hidden_states = self.l_in(inputs_embeds)
 
         for transformer_encoder_layer in self.transformer_encoder_layers:
@@ -117,8 +119,7 @@ class AslmModel(PreTrainedModel):
 
 
     def reinitialize_weights(self, std=0.02):
-
-        def _init_weights(self, module):
+        def _init_weights(module):
             if isinstance(module, nn.Linear):
                 module.weight.data.normal_(mean=0.0, std=std)
                 if module.bias is not None:
