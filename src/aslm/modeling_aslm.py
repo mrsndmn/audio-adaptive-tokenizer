@@ -10,7 +10,7 @@ from transformers import PreTrainedModel
 from transformers.modeling_outputs import BaseModelOutputWithPast
 
 class AudioEmbeddingsEncoderPooling(nn.Module):
-    def __init__(self, embedding_dim=2048, hidden_dim=4096, nhead=16, num_layers=2):
+    def __init__(self, embedding_dim=2048, hidden_dim=4096, nhead=16, num_layers=4):
         super().__init__()
 
         self.l_in = nn.Linear(embedding_dim, hidden_dim)
@@ -115,20 +115,20 @@ class AslmModel(PreTrainedModel):
 
         return
 
+
     def reinitialize_weights(self, std=0.02):
-        nn.init.normal_(self.audio_tokens_embeddings.weight, mean=0, std=std)
 
-        if hasattr(self, 'audio_embeddings_pooling'):
-            nn.init.normal_(self.audio_embeddings_pooling.l_in.weight, mean=0, std=std)
-            # nn.init.normal_(self.audio_embeddings_pooling.l_out.weight, mean=0, std=std)
+        def _init_weights(self, module):
+            if isinstance(module, nn.Linear):
+                module.weight.data.normal_(mean=0.0, std=std)
+                if module.bias is not None:
+                    module.bias.data.zero_()
+            elif isinstance(module, nn.Embedding):
+                module.weight.data.normal_(mean=0.0, std=std)
+                if module.padding_idx is not None:
+                    module.weight.data[module.padding_idx].zero_()
 
-        if hasattr(self, 'audio_encoder_projection'):
-            if isinstance(self.audio_encoder_projection, nn.Linear):
-                nn.init.normal_(self.audio_encoder_projection.weight, mean=0, std=std)
-            if isinstance(self.audio_encoder_projection, nn.Sequential):
-                for layer in self.audio_encoder_projection:
-                    if isinstance(layer, nn.Linear):
-                        nn.init.normal_(layer.weight, mean=0, std=std)
+        self.apply(_init_weights)
 
         return
 

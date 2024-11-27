@@ -123,6 +123,20 @@ class TokenizedAudioWaveformCollator(PadWaveformsMixin):
         for i, item in enumerate(items):
             waveform = self._get_waveform(item)
             waveform_num_frames = waveform.shape[-1]
+            
+            waveform_normed = None
+
+            melspec = None
+            melspec_file_path = os.path.join(self.melspec_base_path, item['id'])
+            if item['id'] in self.melspec_files:
+                try:
+                    melspec = torch.load(melspec_file_path, weights_only=False)
+                except Exception as e:
+                    waveform_normed = (waveform - waveform.mean()) / (waveform.std() + 1e-6)
+                    melspec = self.audio_tokenizer.get_melspec(waveform_normed)
+            else:
+                waveform_normed = (waveform - waveform.mean()) / (waveform.std() + 1e-6)
+                melspec = self.audio_tokenizer.get_melspec(waveform_normed)
 
             if self.segmentation == SegmentationType.uniform:
                 num_segments = waveform_num_frames // self.uniform_segmentation_frames_per_segment
@@ -134,19 +148,11 @@ class TokenizedAudioWaveformCollator(PadWaveformsMixin):
                 frames_boarders_raw = np.array(segments_list)
                 frames_boarders = frames_boarders_raw.cumsum()
             elif self.segmentation == SegmentationType.adaptive:
-                waveform_normed = (waveform - waveform.mean()) / (waveform.std() + 1e-6)
+                if waveform_normed is None:
+                    waveform_normed = (waveform - waveform.mean()) / (waveform.std() + 1e-6)
                 awf_sr = AudioWaveform(waveform_normed, self.sampling_rate)
 
-                melspec = None
-                melspec_file_path = os.path.join(self.melspec_base_path, item['id'])
-                if item['id'] in self.melspec_files:
-                    try:
-                        melspec = torch.load(melspec_file_path, weights_only=False)
-                    except Exception as e:
-                        print(f"Failed to load {melspec_file_path}:", e)
-
                 item_audio_segments, melspec = self.audio_tokenizer.tokenize(awf_sr, melspec=melspec)
-                items_melspecs.append(melspec)
                 segment_frames = [ sf.waveform.shape[-1] for sf in item_audio_segments ]
                 frames_boarders_raw = np.array(segment_frames)
                 frames_boarders = frames_boarders_raw.cumsum()
@@ -191,9 +197,18 @@ class TokenizedAudioWaveformCollator(PadWaveformsMixin):
                 frames_boarders = frames_boarders - start_segment_waveform_num
                 assert frames_boarders[0] == 0
                 frames_boarders = frames_boarders[1:] # сut off leading zero
-                assert len(frames_boarders) > 1
+                # assert len(frames_boarders) > 1
+                melspec_overlapping = 5
+                waveform_frames_overlapping = melspec_overlapping * self.audio_tokenizer.hop_length
 
+                start_segment_waveform_num = max(0, start_segment_waveform_num - waveform_frames_overlapping)
+                end_segment_waveform_num = min(end_segment_waveform_num + waveform_frames_overlapping, waveform.shape[-1])
                 waveform = waveform[start_segment_waveform_num:end_segment_waveform_num]
+
+                start_segment_melspec, end_segment_melspec = start_segment_waveform_num // self.audio_tokenizer.hop_length, end_segment_waveform_num // self.audio_tokenizer.hop_length
+                start_segment_melspec = max(0, start_segment_melspec - self.audio_tokenizer.running_mean_points - melspec_overlapping)
+                end_segment_melspec = min(end_segment_melspec + melspec_overlapping, melspec.shape[-1])
+                melspec = melspec[:, start_segment_melspec:end_segment_melspec]
 
             item_text = " ".join(words)
             prefix_for_validation = ""
@@ -209,6 +224,7 @@ class TokenizedAudioWaveformCollator(PadWaveformsMixin):
             tokenizer_input_prefixes_for_validation.append(prefix_for_validation)
 
             audio_segments_waveforms.append(waveform)
+            items_melspecs.append(melspec)
 
             segments_boarders.append( frames_boarders )
             segments_max_frame_len.append(frames_boarders_raw.max())

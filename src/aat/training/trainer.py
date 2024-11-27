@@ -48,7 +48,7 @@ class TrainingArguments(transformers.TrainingArguments):
 
     include_for_metrics: List[str] = field(default_factory=lambda: [ 'inputs' ])
     
-    num_train_epochs: int = field(default=10)
+    num_train_epochs: int = field(default=3)
     few_train_samples: Optional[int] = field(default=None)
     
     eval_steps: int = field(default=1000)

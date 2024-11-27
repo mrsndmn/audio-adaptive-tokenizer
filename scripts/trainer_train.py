@@ -90,7 +90,6 @@ def train(
         max_segment_duration_milliseconds=(max_segment_frames * 1000 // train_config.sampling_rate)
         audio_tokenizer = AdaptiveAudioAmplitudeTokenizer(
             max_segment_duration_milliseconds=(max_segment_frames * 1000 // train_config.sampling_rate),
-            n_words=n_words
         )
         
         trainer = AATTrainerSegmentation(
@@ -104,6 +103,7 @@ def train(
                 audio_tokenizer,
                 training_args.audio_encoder_checkpoint,
                 tokenizer,
+                n_words=n_words,
                 uniform_segmentation_frames_per_segment=max_segment_frames
             ),
             train_dataset=audio_dataset,
