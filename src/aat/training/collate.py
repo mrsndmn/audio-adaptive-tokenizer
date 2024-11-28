@@ -86,7 +86,7 @@ class TokenizedAudioWaveformCollator(PadWaveformsMixin):
         
         self.melspec_base_path = "data/libris_melspectrograms"
         self.melspec_files = set(os.listdir(self.melspec_base_path))
-        
+
         return
     
     def _get_waveform(self, item):
@@ -100,7 +100,7 @@ class TokenizedAudioWaveformCollator(PadWaveformsMixin):
         return waveform
 
     
-    def _initial_process_segments(self, items):
+    def _initial_process_segments(self, items, is_validation=False):
         tokenizer = self.tokenizer
 
         bos_token = tokenizer.decode(tokenizer.bos_token_id)
@@ -116,7 +116,7 @@ class TokenizedAudioWaveformCollator(PadWaveformsMixin):
 
         
         n_words = None
-        if self.n_words is not None:
+        if self.n_words is not None and not is_validation:
             n_words = random.randint(5, self.n_words)
         
         items_melspecs = []
@@ -251,14 +251,14 @@ class TokenizedAudioWaveformCollator(PadWaveformsMixin):
 
         return segments_boarders_padded, segments_boarders_attention_mask
 
-    def __call__(self, items):
+    def __call__(self, items, is_validation=False):
 
         tokenizer = self.tokenizer
 
         result = dict()
         # random select caption
 
-        initial_process = self._initial_process_segments(items)
+        initial_process = self._initial_process_segments(items, is_validation=is_validation)
         tokenizer_input = initial_process['tokenizer_input']
         tokenizer_input_prefixes_for_validation = initial_process['tokenizer_input_prefixes_for_validation']
         segments_boarders = initial_process['segments_boarders']

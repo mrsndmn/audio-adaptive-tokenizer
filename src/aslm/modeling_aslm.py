@@ -10,14 +10,15 @@ from transformers import PreTrainedModel
 from transformers.modeling_outputs import BaseModelOutputWithPast
 
 class AudioEmbeddingsEncoderPooling(nn.Module):
-    def __init__(self, embedding_dim=2048, hidden_dim=8192, out_dim=2048, nhead=32, num_layers=1, max_positions=64):
+    def __init__(self, embedding_dim=2048, hidden_dim=4096, out_dim=2048, nhead=32, num_layers=2, max_positions=64):
         super().__init__()
 
-        self.l_in = nn.Linear(embedding_dim, hidden_dim)
-        self.l_out = nn.Linear(hidden_dim, out_dim)
-        # self.l_out = nn.Linear(embedding_dim, hidden_dim)
-        
         self.layer_norm = nn.LayerNorm(hidden_dim)
+        self.l_in = nn.Linear(embedding_dim, hidden_dim)
+        
+        self.l_out = nn.Linear(hidden_dim, out_dim)
+        self.layer_norm_out = nn.LayerNorm(out_dim)
+        
         self.num_layers = num_layers
 
         self.positional_embeddings = nn.Embedding(max_positions, hidden_dim)
@@ -30,28 +31,25 @@ class AudioEmbeddingsEncoderPooling(nn.Module):
             )
         ] * num_layers)
 
+
     def forward(self, inputs_embeds, encoder_attention_mask):
         hidden_states = self.l_in(inputs_embeds)
         
         hidden_states += self.positional_embeddings.weight[:hidden_states.shape[1], :]
-        # hidden_states = self.layer_norm(hidden_states)
+        hidden_states = self.layer_norm(hidden_states)
 
         for transformer_encoder_layer in self.transformer_encoder_layers:
-            hidden_states_backup = hidden_states
-            if hidden_states.isnan().any():
-                print("found nans in hidden_states")
-                breakpoint()
-
             hidden_states = transformer_encoder_layer(
                 src=hidden_states,
                 src_key_padding_mask=(~encoder_attention_mask.bool()),
             )
-            if hidden_states.isnan().any():
-                print("found nans in hidden_states")
-                breakpoint()
+            # if hidden_states.isnan().any():
+            #     print("found nans in hidden_states")
+            #     breakpoint()
 
         # [bs * segments_count, 1, hidden_dim]
         pooler_output = self.l_out(hidden_states[:, 0:1, :])
+        pooler_output = self.layer_norm_out(pooler_output)
         # pooler_output = self.layer_norm(hidden_states[:, 0:1, :])
 
         return pooler_output
@@ -213,7 +211,7 @@ class AslmModel(PreTrainedModel):
         audio_embeds_attention_mask = self.audio_encoder._get_feature_vector_attention_mask(audio_embeds.shape[1], waveforms_mask, **extra_kw_args)
         audio_embeds_attention_mask[audio_embeds_negative_attention_mask] = 0
 
-        assert not audio_embeds.isnan().any()
+        # assert not audio_embeds.isnan().any()
 
         assert audio_embeds_attention_mask.shape[1] == audio_embeds.shape[1]
         assert audio_embeds_attention_mask.shape[0] == audio_embeds.shape[0]
@@ -381,7 +379,7 @@ class AslmModel(PreTrainedModel):
         return { key_prefix + '.' + k: v for k, v in state_dict.items() }
 
     def save_pretrained(self, *args, **kwargs):
-        save_audio_encoder = isinstance(self.audio_encoder, EfficientNetAudioEncdoerAdapter)
+        save_audio_encoder = True
         state_dict_filtered = { k: v for k, v in self.state_dict().items() if not k.startswith('lm_decoder.') and (not k.startswith('audio_encoder.') or save_audio_encoder) }
         kwargs['state_dict'] = state_dict_filtered
 

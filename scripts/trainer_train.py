@@ -317,7 +317,7 @@ if __name__ == '__main__':
         train_config,
         training_args,
         device=device,
-        from_pretrained=None,
+        from_pretrained=training_args.model_projection_from_pretrained,
         audio_encoder_embeddings_seq_len=audio_encoder_embeddings_seq_len,
         projection_type=training_args.projection_type,
     )
