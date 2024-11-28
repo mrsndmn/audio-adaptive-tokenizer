@@ -10,15 +10,17 @@ from transformers import PreTrainedModel
 from transformers.modeling_outputs import BaseModelOutputWithPast
 
 class AudioEmbeddingsEncoderPooling(nn.Module):
-    def __init__(self, embedding_dim=2048, hidden_dim=4096, nhead=16, num_layers=4):
+    def __init__(self, embedding_dim=2048, hidden_dim=8192, out_dim=2048, nhead=32, num_layers=1, max_positions=64):
         super().__init__()
 
         self.l_in = nn.Linear(embedding_dim, hidden_dim)
+        self.l_out = nn.Linear(hidden_dim, out_dim)
         # self.l_out = nn.Linear(embedding_dim, hidden_dim)
         
         self.layer_norm = nn.LayerNorm(hidden_dim)
         self.num_layers = num_layers
 
+        self.positional_embeddings = nn.Embedding(max_positions, hidden_dim)
         self.transformer_encoder_layers = nn.ModuleList([
             nn.TransformerEncoderLayer(
                 d_model=hidden_dim,
@@ -29,17 +31,27 @@ class AudioEmbeddingsEncoderPooling(nn.Module):
         ] * num_layers)
 
     def forward(self, inputs_embeds, encoder_attention_mask):
-        # hidden_states = self.layer_norm(hidden_states)
         hidden_states = self.l_in(inputs_embeds)
+        
+        hidden_states += self.positional_embeddings.weight[:hidden_states.shape[1], :]
+        # hidden_states = self.layer_norm(hidden_states)
 
         for transformer_encoder_layer in self.transformer_encoder_layers:
+            hidden_states_backup = hidden_states
+            if hidden_states.isnan().any():
+                print("found nans in hidden_states")
+                breakpoint()
+
             hidden_states = transformer_encoder_layer(
                 src=hidden_states,
-                src_key_padding_mask=encoder_attention_mask.bool(),
+                src_key_padding_mask=(~encoder_attention_mask.bool()),
             )
+            if hidden_states.isnan().any():
+                print("found nans in hidden_states")
+                breakpoint()
 
         # [bs * segments_count, 1, hidden_dim]
-        pooler_output = hidden_states[:, 0:1, :]
+        pooler_output = self.l_out(hidden_states[:, 0:1, :])
         # pooler_output = self.layer_norm(hidden_states[:, 0:1, :])
 
         return pooler_output
@@ -91,7 +103,10 @@ class AslmModel(PreTrainedModel):
 
         if config.projection_type == SegmentProjectionEnum.transformer_encoder:
             self.audio_embeddings_pooling_cls_token = nn.Embedding(1, audio_encoder_hidden_size)
-            self.audio_embeddings_pooling = AudioEmbeddingsEncoderPooling(embedding_dim=audio_encoder_hidden_size, hidden_dim=lm_decoder.config.hidden_size)
+            # + 1 for bos token
+            max_positions = config.audio_encoder_embeddings_seq_len + 1
+            self.audio_embeddings_pooling = AudioEmbeddingsEncoderPooling(embedding_dim=audio_encoder_hidden_size, out_dim=lm_decoder.config.hidden_size, max_positions=max_positions)
+            print("poolling params", sum(p.numel() for p in self.audio_embeddings_pooling.parameters()), "lm_decoder.config.hidden_size", lm_decoder.config.hidden_size)
         elif config.projection_type == SegmentProjectionEnum.linear:
             linear_features = audio_encoder_hidden_size * config.audio_encoder_embeddings_seq_len
             # self.audio_encoder_projection = nn.Sequential(
@@ -129,7 +144,17 @@ class AslmModel(PreTrainedModel):
                 if module.padding_idx is not None:
                     module.weight.data[module.padding_idx].zero_()
 
-        self.apply(_init_weights)
+        attribute_names = [
+            'audio_embeddings_pooling_cls_token',
+            'audio_embeddings_pooling',
+            'audio_encoder_projection',
+            'audio_tokens_embeddings',
+        ]
+        for attribute_name in attribute_names:
+            if not hasattr(self, attribute_name):
+                continue
+            attribute_value = self.__getattr__(attribute_name)
+            attribute_value.apply(_init_weights)
 
         return
 
@@ -214,7 +239,7 @@ class AslmModel(PreTrainedModel):
             cls_tokens_embeddings = self.audio_embeddings_pooling_cls_token(cls_tokens_tensor)
             audio_embeds_with_cls = torch.cat([cls_tokens_embeddings, audio_embeds], dim=1)
             
-            cls_mask_value = torch.zeros([ batch_size ], dtype=audio_embeds_attention_mask.dtype, device=audio_embeds_attention_mask.device).unsqueeze(1)
+            cls_mask_value = torch.ones([ batch_size ], dtype=audio_embeds_attention_mask.dtype, device=audio_embeds_attention_mask.device).unsqueeze(1)
             audio_embeds_attention_mask_with_cls = torch.cat([cls_mask_value, audio_embeds_attention_mask], dim=-1)
 
             audio_embeds = self.audio_embeddings_pooling.forward(audio_embeds_with_cls, encoder_attention_mask=audio_embeds_attention_mask_with_cls)
