@@ -10,7 +10,7 @@ from transformers import PreTrainedModel
 from transformers.modeling_outputs import BaseModelOutputWithPast
 
 class AudioEmbeddingsEncoderPooling(nn.Module):
-    def __init__(self, embedding_dim=2048, hidden_dim=4096, out_dim=2048, nhead=32, num_layers=2, max_positions=64):
+    def __init__(self, embedding_dim=2048, hidden_dim=4096, out_dim=2048, nhead=32, num_layers=8, max_positions=64):
         super().__init__()
 
         self.layer_norm = nn.LayerNorm(hidden_dim)
@@ -22,14 +22,14 @@ class AudioEmbeddingsEncoderPooling(nn.Module):
         self.num_layers = num_layers
 
         self.positional_embeddings = nn.Embedding(max_positions, hidden_dim)
-        self.transformer_encoder_layers = nn.ModuleList([
-            nn.TransformerEncoderLayer(
-                d_model=hidden_dim,
-                nhead=nhead,
-                batch_first=True,
-                norm_first=True
-            )
-        ] * num_layers)
+        
+        encoder_layer =  nn.TransformerEncoderLayer(
+            d_model=hidden_dim,
+            nhead=nhead,
+            batch_first=True,
+            norm_first=True
+        )
+        self.transformer_encoder = nn.TransformerEncoder(encoder_layer, num_layers)
 
 
     def forward(self, inputs_embeds, encoder_attention_mask):
@@ -38,11 +38,11 @@ class AudioEmbeddingsEncoderPooling(nn.Module):
         hidden_states += self.positional_embeddings.weight[:hidden_states.shape[1], :]
         hidden_states = self.layer_norm(hidden_states)
 
-        for transformer_encoder_layer in self.transformer_encoder_layers:
-            hidden_states = transformer_encoder_layer(
-                src=hidden_states,
-                src_key_padding_mask=(~encoder_attention_mask.bool()),
-            )
+        hidden_states = self.transformer_encoder(
+            src=hidden_states,
+            src_key_padding_mask=(~encoder_attention_mask.bool()),
+            is_causal=False,
+        )
             # if hidden_states.isnan().any():
             #     print("found nans in hidden_states")
             #     breakpoint()
@@ -233,11 +233,11 @@ class AslmModel(PreTrainedModel):
             
             batch_size = audio_embeds.shape[0]
             
-            cls_tokens_tensor = torch.zeros([ batch_size ], dtype=torch.long, device=audio_embeds.device).unsqueeze(1)
+            cls_tokens_tensor = torch.zeros([ batch_size, 1 ], dtype=torch.long, device=audio_embeds.device)
             cls_tokens_embeddings = self.audio_embeddings_pooling_cls_token(cls_tokens_tensor)
             audio_embeds_with_cls = torch.cat([cls_tokens_embeddings, audio_embeds], dim=1)
             
-            cls_mask_value = torch.ones([ batch_size ], dtype=audio_embeds_attention_mask.dtype, device=audio_embeds_attention_mask.device).unsqueeze(1)
+            cls_mask_value = torch.ones([ batch_size, 1 ], dtype=audio_embeds_attention_mask.dtype, device=audio_embeds_attention_mask.device)
             audio_embeds_attention_mask_with_cls = torch.cat([cls_mask_value, audio_embeds_attention_mask], dim=-1)
 
             audio_embeds = self.audio_embeddings_pooling.forward(audio_embeds_with_cls, encoder_attention_mask=audio_embeds_attention_mask_with_cls)
