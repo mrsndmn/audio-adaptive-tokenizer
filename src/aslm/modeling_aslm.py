@@ -12,6 +12,8 @@ from transformers.modeling_outputs import BaseModelOutputWithPast
 class AudioEmbeddingsEncoderPooling(nn.Module):
     def __init__(self, embedding_dim=2048, hidden_dim=4096, out_dim=2048, nhead=32, num_layers=8, max_positions=64):
         super().__init__()
+        
+        self.embedding_dim = embedding_dim
 
         self.layer_norm = nn.LayerNorm(hidden_dim)
         self.l_in = nn.Linear(embedding_dim, hidden_dim)
@@ -32,7 +34,7 @@ class AudioEmbeddingsEncoderPooling(nn.Module):
         self.transformer_encoder = nn.TransformerEncoder(encoder_layer, num_layers)
 
 
-    def forward(self, inputs_embeds, encoder_attention_mask):
+    def forward(self, inputs_embeds, encoder_attention_mask, with_last_layer_norm=False):
         hidden_states = self.l_in(inputs_embeds)
         
         hidden_states += self.positional_embeddings.weight[:hidden_states.shape[1], :]
@@ -49,7 +51,8 @@ class AudioEmbeddingsEncoderPooling(nn.Module):
 
         # [bs * segments_count, 1, hidden_dim]
         pooler_output = self.l_out(hidden_states[:, 0:1, :])
-        pooler_output = self.layer_norm_out(pooler_output)
+        if with_last_layer_norm:
+            pooler_output = self.layer_norm_out(pooler_output)
         # pooler_output = self.layer_norm(hidden_states[:, 0:1, :])
 
         return pooler_output

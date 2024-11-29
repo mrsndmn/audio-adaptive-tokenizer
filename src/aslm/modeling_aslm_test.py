@@ -2,7 +2,7 @@ from tqdm.auto import tqdm
 import torch
 from transformers import AutoModelForCausalLM, HubertModel
 from transformers.modeling_outputs import CausalLMOutput
-from .modeling_aslm import AslmModel
+from .modeling_aslm import AslmModel, AudioEmbeddingsEncoderPooling
 from .configuration_aslm import AslmConfig, SegmentationType, SegmentProjectionEnum
 
 import tempfile
@@ -55,4 +55,21 @@ def test_aslm_save_load_pretrained():
         assert (model_state_dict[k] == v).all(), f'{k} mismatch'
 
 
-# def test_batched_waveforms_with_no_values_in_attention_mask():
+def test_audio_embeddings_encoder_pooling_backward_gradients():
+    
+    aeep = AudioEmbeddingsEncoderPooling(embedding_dim=128, hidden_dim=256, out_dim=128, nhead=8)
+    
+    batch_size, seq_len = 3, 7
+    hidden_states = torch.rand([batch_size, seq_len, aeep.embedding_dim], requires_grad=True)
+    encoder_attention_mask = torch.tensor([
+        [ 1, 1, 1, 1, 1, 1, 1 ],
+        [ 1, 1, 1, 1, 1, 0, 0 ],
+        [ 1, 1, 1, 1, 1, 1, 0 ],
+    ])
+
+    outputs_no_ln = aeep.forward(hidden_states, encoder_attention_mask)
+    rand_grads = torch.rand_like(outputs_no_ln)
+    outputs_no_ln.backward(rand_grads.detach())
+
+    assert hidden_states.grad is not None
+    assert ((hidden_states.grad.sum(dim=-1) != 0) == encoder_attention_mask.bool()).all()
