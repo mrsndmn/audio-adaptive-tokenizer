@@ -74,7 +74,7 @@ class TrainingArguments(transformers.TrainingArguments):
     projection_type: str  =  field(default="linear")
     audio_encoder_embeddings_seq_len: int = field(default=1)
     max_segment_frames: Optional[int] = field(default=4000)
-    
+
     # Сколько максимум будет слов в батче?
     n_words: Optional[int] = field(default=None)
     model_projection_from_pretrained: Optional[str] = field(default=None)

@@ -29,7 +29,7 @@ class ComputeMetrics():
 
     @cached_property
     def wer_compute(self):
-        return evaluate.load("wer")
+        return evaluate.load("wer", keep_in_memory=True)
 
     def __call__(self, predictions=None, label_ids=None, losses=None, inputs=None, prefix_ids=None, generated_ids=None, **kwargs) -> Dict:
         inputs_ids = inputs
@@ -89,8 +89,11 @@ class ComputeMetrics():
         logger.warning(f"wer_references {wer_references[:10]}")
 
         wer_score = 0.0
-        if wer_compute is not None:
-            wer_score = wer_compute.compute(predictions=generations, references=wer_references)
+        try:
+            if wer_compute is not None:
+                wer_score = wer_compute.compute(predictions=generations, references=wer_references)
+        except Exception as e:
+            print("Can't compute wer:", e)
 
         validation_metrics = {
             "wer": wer_score

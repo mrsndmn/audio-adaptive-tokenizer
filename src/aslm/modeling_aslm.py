@@ -38,7 +38,7 @@ class AudioEmbeddingsEncoderPooling(nn.Module):
         hidden_states = self.l_in(inputs_embeds)
         
         hidden_states += self.positional_embeddings.weight[:hidden_states.shape[1], :]
-        hidden_states = self.layer_norm(hidden_states)
+        # hidden_states = self.layer_norm(hidden_states)
 
         hidden_states = self.transformer_encoder(
             src=hidden_states,
