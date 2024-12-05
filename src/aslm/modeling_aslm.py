@@ -3,14 +3,15 @@ import torch
 import torch.nn as nn
 import torch.nn.functional as F
 
-from aslm.configuration_aslm import AslmConfig, SegmentProjectionEnum
+from aslm.configuration_aslm import AslmConfig, SegmentProjectionEnum, SegmentationType
 
 import safetensors
 from transformers import PreTrainedModel
 from transformers.modeling_outputs import BaseModelOutputWithPast
 
 class AudioEmbeddingsEncoderPooling(nn.Module):
-    def __init__(self, embedding_dim=2048, hidden_dim=4096, out_dim=2048, nhead=32, num_layers=8, max_positions=64):
+    
+    def __init__(self, embedding_dim=2048, hidden_dim=4096, out_dim=2048, nhead=32, num_layers=4, max_positions=64):
         super().__init__()
         
         self.embedding_dim = embedding_dim
@@ -36,6 +37,7 @@ class AudioEmbeddingsEncoderPooling(nn.Module):
 
     def forward(self, inputs_embeds, encoder_attention_mask, with_last_layer_norm=False):
         hidden_states = self.l_in(inputs_embeds)
+        # print("hidden_states", hidden_states.shape)
         
         hidden_states += self.positional_embeddings.weight[:hidden_states.shape[1], :]
         # hidden_states = self.layer_norm(hidden_states)
@@ -93,6 +95,7 @@ class EfficientNetAudioEncdoerAdapter(nn.Module):
 class AslmModel(PreTrainedModel):
 
     config_class = AslmConfig
+    supports_gradient_checkpointing = True
 
     _keys_to_ignore_on_load_missing = [r"audio_encoder", r"lm_decoder"]
 

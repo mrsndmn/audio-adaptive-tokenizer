@@ -285,6 +285,7 @@ class TokenizedAudioWaveformCollator(PadWaveformsMixin):
         result['segments_boarders_padded'] = segments_boarders_padded
         result['segments_boarders_attention_mask'] = segments_boarders_attention_mask
         result['segments_max_frame_len'] = torch.tensor(segments_max_frame_len)
+        # print("segments_max_frame_len", segments_max_frame_len)
 
         # make waveforms segments
         batch_size = segments_boarders_padded.shape[0]

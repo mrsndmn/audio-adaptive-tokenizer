@@ -12,6 +12,8 @@ from transformers.trainer import (
 from typing import List, Optional, Union, Any, Union, Dict, Tuple
 
 import datasets
+from aslm.configuration_aslm import AslmConfig, SegmentProjectionEnum, SegmentationType
+
 
 import numpy as np
 
@@ -684,7 +686,8 @@ class AATTrainerSegmentation(AATTrainer):
         # audio_hidden_states ~ [ bs * segments_count, seq_len, embedding_dim ]
         # embeddings_attention_mask ~ [ bs * segments_count, seq_len ]
         
-        assert audio_embeds.shape[1] == self.model.config.audio_encoder_embeddings_seq_len
+        if self.args.segmentation == SegmentationType.uniform:
+            assert audio_embeds.shape[1] == self.model.config.audio_encoder_embeddings_seq_len
 
         assert not audio_embeds.isnan().any()
 

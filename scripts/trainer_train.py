@@ -119,6 +119,8 @@ def train(
         audio_tokenizer = AdaptiveAudioAmplitudeTokenizer(
             max_segment_duration_milliseconds=max_segment_duration_milliseconds
         )
+        
+        print("adaptive tokenization:", "min_segment_duration_milliseconds", audio_tokenizer.min_segment_duration_milliseconds, "max_segment_duration_milliseconds", audio_tokenizer.max_segment_duration_milliseconds)
 
         trainer = AATTrainerSegmentation(
             model,
@@ -152,6 +154,8 @@ def train(
     
     trainer.train(
         # resume_from_checkpoint="data/models/hubert_linear_projection_experiments_24_transformer_encoder_uniform/checkpoint-111000"
+        # resume_from_checkpoint="data/models/hubert_linear_projection_experiments_74_transformer_encoder_adaptive_checkpoint-40000_pretrained_audio_encoder"
+        resume_from_checkpoint="data/models/hubert_linear_projection_experiments_74_transformer_encoder_adaptive-checkpoint-110000/"
     )
 
     breakpoint()
