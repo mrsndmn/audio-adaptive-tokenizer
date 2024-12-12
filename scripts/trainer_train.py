@@ -117,6 +117,7 @@ def train(
         n_words = training_args.n_words
         max_segment_duration_milliseconds=(max_segment_frames * 1000 // train_config.sampling_rate)
         audio_tokenizer = AdaptiveAudioAmplitudeTokenizer(
+            min_segment_duration_milliseconds=500,
             max_segment_duration_milliseconds=max_segment_duration_milliseconds
         )
         
@@ -155,7 +156,9 @@ def train(
     trainer.train(
         # resume_from_checkpoint="data/models/hubert_linear_projection_experiments_24_transformer_encoder_uniform/checkpoint-111000"
         # resume_from_checkpoint="data/models/hubert_linear_projection_experiments_74_transformer_encoder_adaptive_checkpoint-40000_pretrained_audio_encoder"
-        resume_from_checkpoint="data/models/hubert_linear_projection_experiments_74_transformer_encoder_adaptive-checkpoint-110000/"
+        # resume_from_checkpoint="data/models/hubert_linear_projection_experiments_74_transformer_encoder_adaptive-checkpoint-110000/"
+        # resume_from_checkpoint="data/models/hubert_linear_projection_experiments_74_transformer_encoder_adaptive-checkpoint-132000/"
+        resume_from_checkpoint="data/models/hubert_linear_projection_experiments_74_transformer_encoder_adaptive-checkpoint-256000"
     )
 
     breakpoint()
@@ -255,7 +258,7 @@ def build_model(train_config: TrainConfig, training_args: TrainingArguments, fro
     if not training_args.train_audio_encoder:
         freeze_model(model.audio_encoder)
 
-    if not train_config.optim_lm:
+    if not training_args.train_lm_decoder:
         freeze_model(model.lm_decoder)
 
     # unfreeze_model(model.audio_encoder)

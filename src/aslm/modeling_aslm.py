@@ -386,7 +386,8 @@ class AslmModel(PreTrainedModel):
 
     def save_pretrained(self, *args, **kwargs):
         save_audio_encoder = True
-        state_dict_filtered = { k: v for k, v in self.state_dict().items() if not k.startswith('lm_decoder.') and (not k.startswith('audio_encoder.') or save_audio_encoder) }
+        save_lm_decoder = True
+        state_dict_filtered = { k: v for k, v in self.state_dict().items() if (not k.startswith('lm_decoder.') or save_lm_decoder) and (not k.startswith('audio_encoder.') or save_audio_encoder) }
         kwargs['state_dict'] = state_dict_filtered
 
         return super().save_pretrained(*args, **kwargs)

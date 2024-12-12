@@ -159,7 +159,6 @@ class TokenizedAudioWaveformCollator(PadWaveformsMixin):
             else:
                 raise ValueError(f"Unhandled seglent projection type: {self.segmentation}")
 
-            assert frames_boarders_raw.sum() == waveform_num_frames
 
             words = item['words']
 
@@ -168,6 +167,8 @@ class TokenizedAudioWaveformCollator(PadWaveformsMixin):
             waveform_start_frame = 0
 
             if n_words is not None and len(words) > n_words:
+                assert frames_boarders_raw.sum() == waveform_num_frames
+
                 waveform_end_frame = waveform.shape[-1]
 
                 word_start_idx = random.randint(0, len(words)-n_words)

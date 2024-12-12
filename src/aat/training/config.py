@@ -41,7 +41,6 @@ class TrainConfig(BaseExperiment):
     audio_encoder_pretrained_model: str = "facebook/hubert-large-ls960-ft"
     lm_pretrained_model: str = "HuggingFaceTB/SmolLM-135M-Instruct"
     lm_flash_attention: bool = False
-    optim_lm: bool = True
     unfreeze_lm_at_epoch: Optional[int]
 
     # Data
@@ -72,7 +71,6 @@ def overfit_one_batch_train_config():
         audio_encoder_pretrained_model = "facebook/hubert-large-ls960-ft",
         lm_pretrained_model = "Qwen/Qwen1.5-1.8B",
 
-        optim_lm = False,
         lm_flash_attention = True,
         unfreeze_lm_at_epoch = None,
 
@@ -99,7 +97,6 @@ def projection_training():
         audio_encoder_pretrained_model = "facebook/hubert-large-ls960-ft",
         lm_pretrained_model = "Qwen/Qwen1.5-1.8B",
 
-        optim_lm = False,
         lm_flash_attention = False,
         unfreeze_lm_at_epoch = None,
 
@@ -124,7 +121,6 @@ def finetuning_lm():
         audio_encoder_pretrained_model = "facebook/hubert-large-ls960-ft",
         lm_pretrained_model = "Qwen/Qwen1.5-1.8B",
 
-        optim_lm = True,
         lm_flash_attention = False,
         unfreeze_lm_at_epoch = None,
 

@@ -20,9 +20,11 @@ class AdaptiveAudioAmplitudeTokenizer():
                 hop_length=160,
                 num_mel_filters=64,
                 sampling_rate=16000,
+                max_amplitude_for_minima=15,
             ):
 
         self.running_mean_points = running_mean_points
+        self.max_amplitude_for_minima = max_amplitude_for_minima
 
         self.n_fft = n_fft
         self.hop_length = hop_length
@@ -62,7 +64,7 @@ class AdaptiveAudioAmplitudeTokenizer():
         """
 
         # Averaging over frequency dimension
-        melspec_mean_amplitude = melspec.mean(axis=0) # shape (seq_len)
+        melspec_mean_amplitude = - 10 * melspec.mean(axis=0) # shape (seq_len)
 
 
         # Smooth amplitude over time
@@ -81,6 +83,11 @@ class AdaptiveAudioAmplitudeTokenizer():
             return x1 > x2 + 1e-5
 
         minimas = argrelextrema(melspec_mean_amplitude, greater_eps)[0] # shape (num_minimas)
+        
+        # filter out big amplitude minimas
+        # that are corresponds to loud audio input
+        # amplitude is negative np array
+        minimas = minimas[ melspec_mean_amplitude[minimas] > self.max_amplitude_for_minima ]
 
         return minimas
 

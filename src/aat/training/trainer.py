@@ -71,6 +71,7 @@ class TrainingArguments(transformers.TrainingArguments):
     segmentation: str = field(default="none")
     
     train_audio_encoder: bool =  field(default=True)
+    train_lm_decoder: bool =  field(default=False)
     audio_encoder_type: AudioEncoderType =  field(default="hubert") # 
     audio_encoder_checkpoint: str =  field(default="facebook/hubert-large-ls960-ft") # facebook/wav2vec2-large-lv60
     projection_type: str  =  field(default="linear")
